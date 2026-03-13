@@ -1,23 +1,20 @@
 {
   "development": {
-    "username": "root",
-    "password": null,
-    "database": "database_development",
+    "use_env_variable": "DATABASE_URL",
+    "dialect": "postgres",
     "host": "127.0.0.1",
-    "dialect": "mysql"
+    "port": 5432
   },
   "test": {
-    "username": "root",
-    "password": null,
-    "database": "database_test",
+    "use_env_variable": "DATABASE_URL",
+    "dialect": "postgres",
     "host": "127.0.0.1",
-    "dialect": "mysql"
+    "port": 5432
   },
   "production": {
-    "username": "root",
-    "password": null,
-    "database": "database_production",
+    "use_env_variable": "DATABASE_URL",
+    "dialect": "postgres",
     "host": "127.0.0.1",
-    "dialect": "mysql"
+    "port": 5432
   }
 }
