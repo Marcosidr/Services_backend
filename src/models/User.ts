@@ -1,4 +1,4 @@
-        import {
+import {
   CreationOptional,
   DataTypes,
   InferAttributes,
@@ -17,6 +17,9 @@ export class User extends Model<UserAttributes, UserCreationAttributes> {
   declare id: CreationOptional<string>;
   declare name: string;
   declare email: string;
+  declare phone: string | null;
+  declare password: string | null;
+  declare role: CreationOptional<"user" | "professional" | "admin">;
   declare createdAt: CreationOptional<Date>;
   declare updatedAt: CreationOptional<Date>;
 }
@@ -38,6 +41,22 @@ export function initUserModel(sequelize: Sequelize) {
         allowNull: false,
         unique: true,
         validate: { isEmail: true }
+      },
+      phone: {
+        type: DataTypes.STRING(32),
+        allowNull: true
+      },
+      password: {
+        type: DataTypes.STRING(255),
+        allowNull: true
+      },
+      role: {
+        type: DataTypes.STRING(20),
+        allowNull: false,
+        defaultValue: "user",
+        validate: {
+          isIn: [["user", "professional", "admin"]]
+        }
       }
     },
     {
