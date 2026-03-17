@@ -5,7 +5,11 @@ import path from "path";
 import usersRouter from "./routes/users.routes";
 import authRouter from "./routes/auth.routes";
 import dashboardRouter from "./routes/dashboard.routes";
+import categoryRouter from "./routes/categories.router";
 import { initDatabase } from "./config/database";
+
+
+
 
 const envPath = path.resolve(process.cwd(), ".env");
 console.log("Tentando carregar .env em:", envPath);
@@ -33,6 +37,8 @@ app.get("/api/health", (req, res) => {
 app.use("/api/auth", authRouter);
 app.use("/api/users", usersRouter);
 app.use("/api/dashboard", dashboardRouter);
+app.use("/api/categories", categoryRouter);
+
 
 const PORT = Number(process.env.PORT) || 3000;
 
