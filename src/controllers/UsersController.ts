@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { User } from "../models";
+import { Category, User } from "../models";
 import { hashPassword } from "../utils/password";
 
 function parseUserId(value: string) {
@@ -19,6 +19,8 @@ type UserPayload = {
   phone?: string;
   password?: string;
   role?: UserRole;
+  categoryId?: number | string;
+  categoryIds?: Array<number | string>;
 };
 
 function normalizeEmail(email: string) {
@@ -31,23 +33,47 @@ function normalizePhone(phone?: string) {
   return normalized.length > 0 ? normalized : null;
 }
 
+function categoriesInclude() {
+  return [
+    {
+      association: "categories",
+      attributes: ["id", "slug", "label", "icon", "is_active"],
+      through: { attributes: [] }
+    }
+  ];
+}
+
 function sanitizeUser(user: User) {
+  const userCategories = (user.get("categories") as Category[] | undefined) ?? [];
+
   return {
     id: user.id,
     name: user.name,
     email: user.email,
     phone: user.phone,
     role: user.role,
+    categories: userCategories.map((category) => ({
+      id: category.id,
+      slug: category.slug,
+      label: category.label,
+      icon: category.icon,
+      is_active: category.is_active
+    })),
     createdAt: user.createdAt,
     updatedAt: user.updatedAt
   };
+}
+
+function hasCategoryPayload(payload: UserPayload) {
+  return typeof payload.categoryId !== "undefined" || typeof payload.categoryIds !== "undefined";
 }
 
 export class UsersController {
   static async index(req: Request, res: Response) {
     const users = await User.findAll({
       order: [["createdAt", "DESC"]],
-      attributes: ["id", "name", "email", "phone", "role", "createdAt", "updatedAt"]
+      attributes: ["id", "name", "email", "phone", "role", "createdAt", "updatedAt"],
+      include: categoriesInclude()
     });
     return res.json(users.map(sanitizeUser));
   }
@@ -59,7 +85,8 @@ export class UsersController {
     if (id === null) return res.status(400).json({ message: "id invalido" });
 
     const user = await User.findByPk(id, {
-      attributes: ["id", "name", "email", "phone", "role", "createdAt", "updatedAt"]
+      attributes: ["id", "name", "email", "phone", "role", "createdAt", "updatedAt"],
+      include: categoriesInclude()
     });
     if (!user) return res.status(404).json({ message: "Usuario nao encontrado" });
 
@@ -67,7 +94,13 @@ export class UsersController {
   }
 
   static async store(req: Request, res: Response) {
-    const { name, email, phone, password, role } = req.body as UserPayload;
+    const { name, email, phone, password, role, categoryId, categoryIds } = req.body as UserPayload;
+
+    if (typeof categoryId !== "undefined" || typeof categoryIds !== "undefined") {
+      return res.status(400).json({
+        message: "Categorias so podem ser definidas no cadastro de profissional"
+      });
+    }
 
     if (!name || !email || !password) {
       return res.status(400).json({ message: "name, email e password sao obrigatorios" });
@@ -77,13 +110,13 @@ export class UsersController {
       return res.status(400).json({ message: "password deve ter no minimo 6 caracteres" });
     }
 
-    const normalizedEmail = normalizeEmail(email);
-    const exists = await User.findOne({ where: { email: normalizedEmail } });
-    if (exists) return res.status(409).json({ message: "Email ja cadastrado" });
-
     if (role && role !== "user" && role !== "professional" && role !== "admin") {
       return res.status(400).json({ message: "role invalida" });
     }
+
+    const normalizedEmail = normalizeEmail(email);
+    const exists = await User.findOne({ where: { email: normalizedEmail } });
+    if (exists) return res.status(409).json({ message: "Email ja cadastrado" });
 
     const user = await User.create({
       name: name.trim(),
@@ -93,7 +126,12 @@ export class UsersController {
       role: role ?? "user"
     });
 
-    return res.status(201).json(sanitizeUser(user));
+    const savedUser = await User.findByPk(user.id, {
+      attributes: ["id", "name", "email", "phone", "role", "createdAt", "updatedAt"],
+      include: categoriesInclude()
+    });
+
+    return res.status(201).json(savedUser ? sanitizeUser(savedUser) : sanitizeUser(user));
   }
 
   static async update(req: Request, res: Response) {
@@ -103,6 +141,13 @@ export class UsersController {
     if (id === null) return res.status(400).json({ message: "id invalido" });
 
     const { name, email, phone, password, role } = req.body as UserPayload;
+
+    if (hasCategoryPayload(req.body as UserPayload)) {
+      return res.status(400).json({
+        message: "Categorias so podem ser definidas no cadastro de profissional"
+      });
+    }
+
     if (!name && !email && typeof phone === "undefined" && !password && !role) {
       return res.status(400).json({ message: "Informe ao menos um campo para atualizar" });
     }
@@ -114,7 +159,6 @@ export class UsersController {
       const normalizedEmail = normalizeEmail(email);
       const exists = await User.findOne({ where: { email: normalizedEmail } });
       if (exists) return res.status(409).json({ message: "Email ja cadastrado" });
-      user.email = normalizedEmail;
     }
 
     if (password && password.length < 6) {
@@ -133,7 +177,12 @@ export class UsersController {
       ...(role ? { role } : {})
     });
 
-    return res.json(sanitizeUser(user));
+    const savedUser = await User.findByPk(id, {
+      attributes: ["id", "name", "email", "phone", "role", "createdAt", "updatedAt"],
+      include: categoriesInclude()
+    });
+
+    return res.json(savedUser ? sanitizeUser(savedUser) : sanitizeUser(user));
   }
 
   static async destroy(req: Request, res: Response) {

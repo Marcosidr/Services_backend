@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { Category } from "../models/Category";
+import { Category } from "../models";
 
 type CategorySlug =
   | "PINTOR"
@@ -32,6 +32,7 @@ function sanitizeCategory(Category: Category) {
     id: Category.id,
     slug: Category.slug,
     label: Category.label,
+    icon: Category.icon,
     is_active: Category.is_active,
     createdAt: Category.createdAt,
     updatedAt: Category.updatedAt
@@ -39,10 +40,11 @@ function sanitizeCategory(Category: Category) {
 }
 export class CategoryController {
   static async index(req: Request, res: Response) {
-   const categories = await Category.findAll({
-  order: [["createdAt", "DESC"]],
-  attributes: ["id", "slug", "label", "icon", "is_active", "createdAt", "updatedAt"]
-});
-return res.json(categories.map(sanitizeCategory));
+    const categories = await Category.findAll({
+      where: { is_active: true },
+      order: [["label", "ASC"]],
+      attributes: ["id", "slug", "label", "icon", "is_active", "createdAt", "updatedAt"]
+    });
+    return res.json(categories.map(sanitizeCategory));
   }
 }

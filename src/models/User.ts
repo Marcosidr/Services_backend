@@ -4,13 +4,16 @@ import {
   InferAttributes,
   InferCreationAttributes,
   Model,
+  NonAttribute,
   Sequelize
 } from "sequelize";
+import type { Category } from "./Category";
+import type { ProfessionalProfile } from "./ProfessionalProfile";
 
-type UserAttributes = InferAttributes<User, { omit: "createdAt" | "updatedAt" }>;
+type UserAttributes = InferAttributes<User, { omit: "createdAt" | "updatedAt" | "categories" }>;
 type UserCreationAttributes = InferCreationAttributes<
   User,
-  { omit: "id" | "createdAt" | "updatedAt" }
+  { omit: "id" | "createdAt" | "updatedAt" | "categories" }
 >;
 
 export class User extends Model<UserAttributes, UserCreationAttributes> {
@@ -20,6 +23,8 @@ export class User extends Model<UserAttributes, UserCreationAttributes> {
   declare phone: string | null;
   declare password: string | null;
   declare role: CreationOptional<"user" | "professional" | "admin">;
+  declare categories?: NonAttribute<Category[]>;
+  declare professionalProfile?: NonAttribute<ProfessionalProfile>;
   declare createdAt: CreationOptional<Date>;
   declare updatedAt: CreationOptional<Date>;
 }
