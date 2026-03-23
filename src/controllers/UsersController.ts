@@ -2,10 +2,13 @@ import type { Request, Response } from "express";
 import { User } from "../models";
 import { hashPassword } from "../utils/password";
 
-function isValidUuid(value: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-    value
-  );
+function parseUserId(value: string) {
+  if (!/^\d+$/.test(value)) return null;
+
+  const id = Number(value);
+  if (!Number.isSafeInteger(id) || id <= 0) return null;
+
+  return id;
 }
 
 type UserRole = "user" | "professional" | "admin";
@@ -52,8 +55,8 @@ export class UsersController {
   static async show(req: Request, res: Response) {
     const idParam = req.params.id;
     if (typeof idParam !== "string") return res.status(400).json({ message: "id invalido" });
-    const id = idParam;
-    if (!isValidUuid(id)) return res.status(400).json({ message: "id invalido" });
+    const id = parseUserId(idParam);
+    if (id === null) return res.status(400).json({ message: "id invalido" });
 
     const user = await User.findByPk(id, {
       attributes: ["id", "name", "email", "phone", "role", "createdAt", "updatedAt"]
@@ -96,8 +99,8 @@ export class UsersController {
   static async update(req: Request, res: Response) {
     const idParam = req.params.id;
     if (typeof idParam !== "string") return res.status(400).json({ message: "id invalido" });
-    const id = idParam;
-    if (!isValidUuid(id)) return res.status(400).json({ message: "id invalido" });
+    const id = parseUserId(idParam);
+    if (id === null) return res.status(400).json({ message: "id invalido" });
 
     const { name, email, phone, password, role } = req.body as UserPayload;
     if (!name && !email && typeof phone === "undefined" && !password && !role) {
@@ -136,8 +139,8 @@ export class UsersController {
   static async destroy(req: Request, res: Response) {
     const idParam = req.params.id;
     if (typeof idParam !== "string") return res.status(400).json({ message: "id invalido" });
-    const id = idParam;
-    if (!isValidUuid(id)) return res.status(400).json({ message: "id invalido" });
+    const id = parseUserId(idParam);
+    if (id === null) return res.status(400).json({ message: "id invalido" });
 
     const user = await User.findByPk(id);
     if (!user) return res.status(404).json({ message: "Usuario nao encontrado" });

@@ -14,7 +14,7 @@ type UserCreationAttributes = InferCreationAttributes<
 >;
 
 export class User extends Model<UserAttributes, UserCreationAttributes> {
-  declare id: CreationOptional<string>;
+  declare id: CreationOptional<number>;
   declare name: string;
   declare email: string;
   declare phone: string | null;
@@ -28,8 +28,8 @@ export function initUserModel(sequelize: Sequelize) {
   User.init(
     {
       id: {
-        type: DataTypes.UUID,
-        defaultValue: DataTypes.UUIDV4,
+        type: DataTypes.INTEGER,
+        autoIncrement: true,
         primaryKey: true
       },
       name: {
