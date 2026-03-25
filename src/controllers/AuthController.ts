@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { User } from "../models";
-import { hashPassword, verifyPassword } from "../utils/password";
+import { getPasswordValidationError, hashPassword, verifyPassword } from "../utils/password";
 import { createAuthToken } from "../utils/token";
 
 type RegisterBody = {
@@ -36,8 +36,9 @@ export class AuthController {
       return res.status(400).json({ message: "name, email, phone e password sao obrigatorios" });
     }
 
-    if (password.length < 6) {
-      return res.status(400).json({ message: "A senha deve ter no minimo 6 caracteres" });
+    const passwordValidationError = getPasswordValidationError(password);
+    if (passwordValidationError) {
+      return res.status(400).json({ message: passwordValidationError });
     }
 
     const normalizedEmail = normalizeEmail(email);

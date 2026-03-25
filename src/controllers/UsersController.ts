@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { Category, User } from "../models";
-import { hashPassword } from "../utils/password";
+import { getPasswordValidationError, hashPassword } from "../utils/password";
 
 function parseUserId(value: string) {
   if (!/^\d+$/.test(value)) return null;
@@ -106,8 +106,9 @@ export class UsersController {
       return res.status(400).json({ message: "name, email e password sao obrigatorios" });
     }
 
-    if (password.length < 6) {
-      return res.status(400).json({ message: "password deve ter no minimo 6 caracteres" });
+    const passwordValidationError = getPasswordValidationError(password);
+    if (passwordValidationError) {
+      return res.status(400).json({ message: passwordValidationError });
     }
 
     if (role && role !== "user" && role !== "professional" && role !== "admin") {
@@ -161,8 +162,11 @@ export class UsersController {
       if (exists) return res.status(409).json({ message: "Email ja cadastrado" });
     }
 
-    if (password && password.length < 6) {
-      return res.status(400).json({ message: "password deve ter no minimo 6 caracteres" });
+    if (password) {
+      const passwordValidationError = getPasswordValidationError(password);
+      if (passwordValidationError) {
+        return res.status(400).json({ message: passwordValidationError });
+      }
     }
 
     if (role && role !== "user" && role !== "professional" && role !== "admin") {
