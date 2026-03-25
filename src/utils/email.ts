@@ -1,4 +1,6 @@
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+const EMAIL_REGEX =
+  /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i;
+const MAX_EMAIL_LENGTH = 254;
 
 export function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
@@ -15,8 +17,12 @@ export function getEmailValidationError(email: string) {
     return "Informe o email";
   }
 
-  if (!isValidEmail(normalizedEmail)) {
+  if (normalizedEmail.length > MAX_EMAIL_LENGTH) {
     return "Email invalido";
+  }
+
+  if (!isValidEmail(normalizedEmail)) {
+    return "Email invalido. Exemplo: nome@dominio.com";
   }
 
   return null;
