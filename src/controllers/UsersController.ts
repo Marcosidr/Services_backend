@@ -1,5 +1,6 @@
 import type { Request, Response } from "express";
 import { Category, User } from "../models";
+import { isValidCpf, normalizeCpf } from "../utils/cpf";
 import { getEmailValidationError, normalizeEmail } from "../utils/email";
 import { getPasswordValidationError, hashPassword } from "../utils/password";
 import { getPhoneValidationError, normalizePhone } from "../utils/phone";
@@ -18,6 +19,7 @@ type UserRole = "user" | "professional" | "admin";
 type UserPayload = {
   name?: string;
   email?: string;
+  cpf?: string;
   phone?: string;
   password?: string;
   role?: UserRole;
@@ -42,6 +44,7 @@ function sanitizeUser(user: User) {
     id: user.id,
     name: user.name,
     email: user.email,
+    cpf: user.cpf,
     phone: user.phone,
     role: user.role,
     categories: userCategories.map((category) => ({
@@ -64,7 +67,7 @@ export class UsersController {
   static async index(req: Request, res: Response) {
     const users = await User.findAll({
       order: [["createdAt", "DESC"]],
-      attributes: ["id", "name", "email", "phone", "role", "createdAt", "updatedAt"],
+      attributes: ["id", "name", "email", "cpf", "phone", "role", "createdAt", "updatedAt"],
       include: categoriesInclude()
     });
     return res.json(users.map(sanitizeUser));
@@ -77,7 +80,7 @@ export class UsersController {
     if (id === null) return res.status(400).json({ message: "id invalido" });
 
     const user = await User.findByPk(id, {
-      attributes: ["id", "name", "email", "phone", "role", "createdAt", "updatedAt"],
+      attributes: ["id", "name", "email", "cpf", "phone", "role", "createdAt", "updatedAt"],
       include: categoriesInclude()
     });
     if (!user) return res.status(404).json({ message: "Usuario nao encontrado" });
@@ -86,7 +89,7 @@ export class UsersController {
   }
 
   static async store(req: Request, res: Response) {
-    const { name, email, phone, password, role, categoryId, categoryIds } = req.body as UserPayload;
+    const { name, email, cpf, phone, password, role, categoryId, categoryIds } = req.body as UserPayload;
 
     if (typeof categoryId !== "undefined" || typeof categoryIds !== "undefined") {
       return res.status(400).json({
@@ -94,8 +97,8 @@ export class UsersController {
       });
     }
 
-    if (!name || !email || !password) {
-      return res.status(400).json({ message: "name, email e password sao obrigatorios" });
+    if (!name || !email || !cpf || !password) {
+      return res.status(400).json({ message: "name, email, cpf e password sao obrigatorios" });
     }
 
     const emailValidationError = getEmailValidationError(email);
@@ -106,6 +109,11 @@ export class UsersController {
     const passwordValidationError = getPasswordValidationError(password);
     if (passwordValidationError) {
       return res.status(400).json({ message: passwordValidationError });
+    }
+
+    const normalizedCpf = normalizeCpf(cpf);
+    if (!isValidCpf(normalizedCpf)) {
+      return res.status(400).json({ message: "CPF invalido" });
     }
 
     if (typeof phone === "string" && phone.trim()) {
@@ -122,17 +130,20 @@ export class UsersController {
     const normalizedEmail = normalizeEmail(email);
     const exists = await User.findOne({ where: { email: normalizedEmail } });
     if (exists) return res.status(409).json({ message: "Email ja cadastrado" });
+    const cpfExists = await User.findOne({ where: { cpf: normalizedCpf } });
+    if (cpfExists) return res.status(409).json({ message: "CPF ja cadastrado" });
 
     const user = await User.create({
       name: name.trim(),
       email: normalizedEmail,
+      cpf: normalizedCpf,
       phone: typeof phone === "string" && phone.trim() ? normalizePhone(phone) : null,
       password: hashPassword(password),
       role: role ?? "user"
     });
 
     const savedUser = await User.findByPk(user.id, {
-      attributes: ["id", "name", "email", "phone", "role", "createdAt", "updatedAt"],
+      attributes: ["id", "name", "email", "cpf", "phone", "role", "createdAt", "updatedAt"],
       include: categoriesInclude()
     });
 
@@ -145,7 +156,7 @@ export class UsersController {
     const id = parseUserId(idParam);
     if (id === null) return res.status(400).json({ message: "id invalido" });
 
-    const { name, email, phone, password, role } = req.body as UserPayload;
+    const { name, email, cpf, phone, password, role } = req.body as UserPayload;
 
     if (hasCategoryPayload(req.body as UserPayload)) {
       return res.status(400).json({
@@ -153,7 +164,7 @@ export class UsersController {
       });
     }
 
-    if (!name && !email && typeof phone === "undefined" && !password && !role) {
+    if (!name && !email && !cpf && typeof phone === "undefined" && !password && !role) {
       return res.status(400).json({ message: "Informe ao menos um campo para atualizar" });
     }
 
@@ -178,6 +189,20 @@ export class UsersController {
       }
     }
 
+    if (cpf) {
+      const normalizedCpf = normalizeCpf(cpf);
+      if (!isValidCpf(normalizedCpf)) {
+        return res.status(400).json({ message: "CPF invalido" });
+      }
+
+      if (normalizedCpf !== user.cpf) {
+        const cpfExists = await User.findOne({ where: { cpf: normalizedCpf } });
+        if (cpfExists) {
+          return res.status(409).json({ message: "CPF ja cadastrado" });
+        }
+      }
+    }
+
     if (typeof phone === "string" && phone.trim()) {
       const phoneValidationError = getPhoneValidationError(phone);
       if (phoneValidationError) {
@@ -192,6 +217,7 @@ export class UsersController {
     await user.update({
       ...(name ? { name: name.trim() } : {}),
       ...(email ? { email: normalizeEmail(email) } : {}),
+      ...(cpf ? { cpf: normalizeCpf(cpf) } : {}),
       ...(typeof phone !== "undefined"
         ? {
             phone:
@@ -205,7 +231,7 @@ export class UsersController {
     });
 
     const savedUser = await User.findByPk(id, {
-      attributes: ["id", "name", "email", "phone", "role", "createdAt", "updatedAt"],
+      attributes: ["id", "name", "email", "cpf", "phone", "role", "createdAt", "updatedAt"],
       include: categoriesInclude()
     });
 

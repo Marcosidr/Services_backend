@@ -316,6 +316,10 @@ export class ProfessionalsController {
       return res.status(403).json({ message: "Nao e permitido promover usuario admin para profissional" });
     }
 
+    if (existingUser?.cpf && existingUser.cpf !== normalizedCpf) {
+      return res.status(409).json({ message: "CPF informado nao confere com o usuario existente" });
+    }
+
     if (!existingUser && (!name || !phone)) {
       return res.status(400).json({
         message: "name e phone sao obrigatorios ao cadastrar profissional sem usuario previo"
@@ -337,6 +341,7 @@ export class ProfessionalsController {
           {
             name: name!.trim(),
             email: normalizedEmail,
+            cpf: normalizedCpf,
             phone: normalizePhone(phone!),
             password: null,
             role: "professional"
@@ -348,6 +353,7 @@ export class ProfessionalsController {
           {
             role: "professional",
             ...(name ? { name: name.trim() } : {}),
+            ...(!user.cpf ? { cpf: normalizedCpf } : {}),
             ...(phone ? { phone: normalizePhone(phone) } : {})
           },
           { transaction }

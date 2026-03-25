@@ -20,6 +20,7 @@ export class User extends Model<UserAttributes, UserCreationAttributes> {
   declare id: CreationOptional<number>;
   declare name: string;
   declare email: string;
+  declare cpf: string | null;
   declare phone: string | null;
   declare password: string | null;
   declare role: CreationOptional<"user" | "professional" | "admin">;
@@ -46,6 +47,14 @@ export function initUserModel(sequelize: Sequelize) {
         allowNull: false,
         unique: true,
         validate: { isEmail: true }
+      },
+      cpf: {
+        type: DataTypes.STRING(11),
+        allowNull: true,
+        unique: true,
+        validate: {
+          is: /^\d{11}$/
+        }
       },
       phone: {
         type: DataTypes.STRING(32),

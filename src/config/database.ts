@@ -94,6 +94,29 @@ END $$;
   await sequelizeInstance.query(migrationQuery);
 }
 
+async function ensureUsersCpfColumn(sequelizeInstance: Sequelize) {
+  const ensureCpfQuery = `
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'users'
+      AND column_name = 'cpf'
+  ) THEN
+    ALTER TABLE users ADD COLUMN cpf VARCHAR(11);
+  END IF;
+
+  CREATE UNIQUE INDEX IF NOT EXISTS users_cpf_unique_idx
+    ON users (cpf)
+    WHERE cpf IS NOT NULL;
+END $$;
+`;
+
+  await sequelizeInstance.query(ensureCpfQuery);
+}
+
 export function getSequelize() {
   if (sequelize) return sequelize;
 
@@ -126,6 +149,7 @@ export async function initDatabase() {
   // Se precisar, ative explicitamente com DB_SYNC_ALTER=true no ambiente.
   const useAlter = process.env.DB_SYNC_ALTER === "true";
   await sequelizeInstance.sync(useAlter ? { alter: true } : undefined);
+  await ensureUsersCpfColumn(sequelizeInstance);
   await migrateLegacyProfessionals(sequelizeInstance);
 
   const categoryCount = await Category.count();

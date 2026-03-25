@@ -1,5 +1,6 @@
 import type { Request, Response } from "express";
 import { User } from "../models";
+import { isValidCpf, normalizeCpf } from "../utils/cpf";
 import { getEmailValidationError, normalizeEmail } from "../utils/email";
 import { getPasswordValidationError, hashPassword, verifyPassword } from "../utils/password";
 import { getPhoneValidationError, normalizePhone } from "../utils/phone";
@@ -8,6 +9,7 @@ import { generateToken } from "../utils/token";
 type RegisterBody = {
   name?: string;
   email?: string;
+  cpf?: string;
   phone?: string;
   password?: string;
 };
@@ -22,16 +24,17 @@ function publicUser(user: User) {
     id: user.id,
     name: user.name,
     email: user.email,
+    cpf: user.cpf,
     role: user.role
   };
 }
 
 export class AuthController {
   static async register(req: Request, res: Response) {
-    const { name, email, phone, password } = req.body as RegisterBody;
+    const { name, email, cpf, phone, password } = req.body as RegisterBody;
 
-    if (!name || !email || !phone || !password) {
-      return res.status(400).json({ message: "name, email, phone e password sao obrigatorios" });
+    if (!name || !email || !cpf || !phone || !password) {
+      return res.status(400).json({ message: "name, email, cpf, phone e password sao obrigatorios" });
     }
 
     const passwordValidationError = getPasswordValidationError(password);
@@ -49,16 +52,31 @@ export class AuthController {
       return res.status(400).json({ message: phoneValidationError });
     }
 
+    const normalizedCpf = normalizeCpf(cpf);
+    if (!isValidCpf(normalizedCpf)) {
+      return res.status(400).json({ message: "CPF invalido" });
+    }
+
     const normalizedEmail = normalizeEmail(email);
-    const exists = await User.findOne({ where: { email: normalizedEmail } });
+    const exists = await User.findOne({
+      where: {
+        email: normalizedEmail
+      }
+    });
 
     if (exists) {
       return res.status(409).json({ message: "Email ja cadastrado" });
     }
 
+    const cpfExists = await User.findOne({ where: { cpf: normalizedCpf } });
+    if (cpfExists) {
+      return res.status(409).json({ message: "CPF ja cadastrado" });
+    }
+
     const user = await User.create({
       name: name.trim(),
       email: normalizedEmail,
+      cpf: normalizedCpf,
       phone: normalizePhone(phone),
       password: hashPassword(password),
       role: "user"
