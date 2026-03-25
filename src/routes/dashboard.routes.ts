@@ -1,7 +1,10 @@
 import { Router } from "express";
 import { DashboardController } from "../controllers/DashboardController";
+import { auth } from "../middlewares/auth";
 
 const router = Router();
+
+router.use(auth);
 
 router.get("/", DashboardController.index);
 router.post("/messages", DashboardController.createMessage);

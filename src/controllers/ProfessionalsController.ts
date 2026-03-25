@@ -2,6 +2,8 @@ import type { Request, Response } from "express";
 import { Op, Transaction } from "sequelize";
 import { Category, Professional, User, UserCategory } from "../models";
 import { isValidCpf, normalizeCpf } from "../utils/cpf";
+import { getEmailValidationError, normalizeEmail } from "../utils/email";
+import { getPhoneValidationError, normalizePhone } from "../utils/phone";
 
 type RegisterProfessionalBody = {
   name?: string;
@@ -36,10 +38,6 @@ type UpgradeProfessionalBody = {
   categoryId?: unknown;
   "categoryIds[]"?: unknown;
 };
-
-function normalizeEmail(email: string) {
-  return email.trim().toLowerCase();
-}
 
 function parseUserId(value: unknown) {
   if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return value;
@@ -280,6 +278,11 @@ export class ProfessionalsController {
       return res.status(400).json({ message: "description e obrigatorio" });
     }
 
+    const emailValidationError = getEmailValidationError(email);
+    if (emailValidationError) {
+      return res.status(400).json({ message: emailValidationError });
+    }
+
     if (parsedCategoryIds === null || parsedCategoryIds.length === 0) {
       return res.status(400).json({ message: "categoryIds invalido" });
     }
@@ -293,6 +296,13 @@ export class ProfessionalsController {
 
     if (!isValidCpf(normalizedCpf)) {
       return res.status(400).json({ message: "CPF invalido" });
+    }
+
+    if (typeof phone !== "undefined") {
+      const phoneValidationError = getPhoneValidationError(String(phone));
+      if (phoneValidationError) {
+        return res.status(400).json({ message: phoneValidationError });
+      }
     }
 
     const existingUser = await User.findOne({ where: { email: normalizedEmail } });
@@ -327,7 +337,7 @@ export class ProfessionalsController {
           {
             name: name!.trim(),
             email: normalizedEmail,
-            phone: phone!.trim(),
+            phone: normalizePhone(phone!),
             password: null,
             role: "professional"
           },
@@ -338,7 +348,7 @@ export class ProfessionalsController {
           {
             role: "professional",
             ...(name ? { name: name.trim() } : {}),
-            ...(phone ? { phone: phone.trim() } : {})
+            ...(phone ? { phone: normalizePhone(phone) } : {})
           },
           { transaction }
         );

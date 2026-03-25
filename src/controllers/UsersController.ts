@@ -1,6 +1,8 @@
 import type { Request, Response } from "express";
 import { Category, User } from "../models";
+import { getEmailValidationError, normalizeEmail } from "../utils/email";
 import { getPasswordValidationError, hashPassword } from "../utils/password";
+import { getPhoneValidationError, normalizePhone } from "../utils/phone";
 
 function parseUserId(value: string) {
   if (!/^\d+$/.test(value)) return null;
@@ -22,16 +24,6 @@ type UserPayload = {
   categoryId?: number | string;
   categoryIds?: Array<number | string>;
 };
-
-function normalizeEmail(email: string) {
-  return email.trim().toLowerCase();
-}
-
-function normalizePhone(phone?: string) {
-  if (typeof phone !== "string") return null;
-  const normalized = phone.trim();
-  return normalized.length > 0 ? normalized : null;
-}
 
 function categoriesInclude() {
   return [
@@ -106,9 +98,21 @@ export class UsersController {
       return res.status(400).json({ message: "name, email e password sao obrigatorios" });
     }
 
+    const emailValidationError = getEmailValidationError(email);
+    if (emailValidationError) {
+      return res.status(400).json({ message: emailValidationError });
+    }
+
     const passwordValidationError = getPasswordValidationError(password);
     if (passwordValidationError) {
       return res.status(400).json({ message: passwordValidationError });
+    }
+
+    if (typeof phone === "string" && phone.trim()) {
+      const phoneValidationError = getPhoneValidationError(phone);
+      if (phoneValidationError) {
+        return res.status(400).json({ message: phoneValidationError });
+      }
     }
 
     if (role && role !== "user" && role !== "professional" && role !== "admin") {
@@ -122,7 +126,7 @@ export class UsersController {
     const user = await User.create({
       name: name.trim(),
       email: normalizedEmail,
-      phone: normalizePhone(phone),
+      phone: typeof phone === "string" && phone.trim() ? normalizePhone(phone) : null,
       password: hashPassword(password),
       role: role ?? "user"
     });
@@ -157,6 +161,11 @@ export class UsersController {
     if (!user) return res.status(404).json({ message: "Usuario nao encontrado" });
 
     if (email && email !== user.email) {
+      const emailValidationError = getEmailValidationError(email);
+      if (emailValidationError) {
+        return res.status(400).json({ message: emailValidationError });
+      }
+
       const normalizedEmail = normalizeEmail(email);
       const exists = await User.findOne({ where: { email: normalizedEmail } });
       if (exists) return res.status(409).json({ message: "Email ja cadastrado" });
@@ -169,6 +178,13 @@ export class UsersController {
       }
     }
 
+    if (typeof phone === "string" && phone.trim()) {
+      const phoneValidationError = getPhoneValidationError(phone);
+      if (phoneValidationError) {
+        return res.status(400).json({ message: phoneValidationError });
+      }
+    }
+
     if (role && role !== "user" && role !== "professional" && role !== "admin") {
       return res.status(400).json({ message: "role invalida" });
     }
@@ -176,7 +192,14 @@ export class UsersController {
     await user.update({
       ...(name ? { name: name.trim() } : {}),
       ...(email ? { email: normalizeEmail(email) } : {}),
-      ...(typeof phone !== "undefined" ? { phone: normalizePhone(phone) } : {}),
+      ...(typeof phone !== "undefined"
+        ? {
+            phone:
+              typeof phone === "string" && phone.trim()
+                ? normalizePhone(phone)
+                : null
+          }
+        : {}),
       ...(password ? { password: hashPassword(password) } : {}),
       ...(role ? { role } : {})
     });
