@@ -39,6 +39,20 @@ type UpgradeProfessionalBody = {
   "categoryIds[]"?: unknown;
 };
 
+function parseCategoryFilter(value: unknown) {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return value;
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
+    const parsed = Number(value.trim());
+    if (Number.isSafeInteger(parsed) && parsed > 0) return parsed;
+  }
+  return null;
+}
+
+function parseTextFilter(value: unknown) {
+  if (typeof value !== "string") return "";
+  return value.trim().toLowerCase();
+}
+
 function parseUserId(value: unknown) {
   if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return value;
   if (typeof value === "string" && /^\d+$/.test(value.trim())) {
@@ -157,6 +171,7 @@ function sanitizeProfessional(user: User) {
   const professional = user.get("professional") as Professional | undefined;
 
   const categoryLabels = categories.map((category) => category.label);
+  const categoryIds = categories.map((category) => String(category.id));
 
   return {
     id: String(user.id),
@@ -165,6 +180,7 @@ function sanitizeProfessional(user: User) {
     online: Boolean(professional?.online),
     verified: Boolean(professional?.verified),
     categoryLabel: categoryLabels.join(" / "),
+    categoryIds,
     rating: 0,
     reviews: 0,
     city: professional?.city ?? "",
@@ -241,6 +257,46 @@ async function saveProfessionalData(
 }
 
 export class ProfessionalsController {
+  static async index(req: Request, res: Response) {
+    const categoryFilter = parseCategoryFilter(req.query.categoryId ?? req.query.cat);
+    const textFilter = parseTextFilter(req.query.q);
+
+    const users = await User.findAll({
+      where: { role: "professional" },
+      order: [["createdAt", "DESC"]],
+      attributes: ["id", "name", "email", "phone", "role", "createdAt", "updatedAt"],
+      include: categoriesInclude()
+    });
+
+    let professionals = users
+      .filter((user) => Boolean(user.get("professional")))
+      .map(sanitizeProfessional);
+
+    if (categoryFilter) {
+      professionals = professionals.filter((professional) =>
+        professional.categoryIds.includes(String(categoryFilter))
+      );
+    }
+
+    if (textFilter) {
+      professionals = professionals.filter((professional) => {
+        const searchableText = [
+          professional.name,
+          professional.categoryLabel,
+          professional.city,
+          professional.description,
+          professional.tags.join(" ")
+        ]
+          .join(" ")
+          .toLowerCase();
+
+        return searchableText.includes(textFilter);
+      });
+    }
+
+    return res.json(professionals);
+  }
+
   static async register(req: Request, res: Response) {
     const {
       name,

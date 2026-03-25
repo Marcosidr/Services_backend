@@ -4,6 +4,7 @@ import { auth } from "../middlewares/auth";
 
 const router = Router();
 
+router.get("/", ProfessionalsController.index);
 router.post("/register", ProfessionalsController.register);
 router.post("/upgrade", auth, ProfessionalsController.upgradeFromUser);
 router.get("/:id", ProfessionalsController.show);
