@@ -7,21 +7,21 @@ import {
   Sequelize
 } from "sequelize";
 
-type ProfessionalProfileAttributes = InferAttributes<ProfessionalProfile, {
+type ProfessionalAttributes = InferAttributes<Professional, {
   omit: "createdAt" | "updatedAt";
 }>;
 
-type ProfessionalProfileCreationAttributes = InferCreationAttributes<ProfessionalProfile, {
+type ProfessionalCreationAttributes = InferCreationAttributes<Professional, {
   omit: "id" | "createdAt" | "updatedAt";
 }>;
 
-export class ProfessionalProfile extends Model<
-  ProfessionalProfileAttributes,
-  ProfessionalProfileCreationAttributes
+export class Professional extends Model<
+  ProfessionalAttributes,
+  ProfessionalCreationAttributes
 > {
   declare id: CreationOptional<number>;
   declare userId: number;
-  declare cpf: string | null;
+  declare cpf: string;
   declare description: string | null;
   declare experience: string | null;
   declare price: number | null;
@@ -37,8 +37,8 @@ export class ProfessionalProfile extends Model<
   declare updatedAt: CreationOptional<Date>;
 }
 
-export function initProfessionalProfileModel(sequelize: Sequelize) {
-  ProfessionalProfile.init(
+export function initProfessionalModel(sequelize: Sequelize) {
+  Professional.init(
     {
       id: {
         type: DataTypes.INTEGER,
@@ -58,7 +58,8 @@ export function initProfessionalProfileModel(sequelize: Sequelize) {
       },
       cpf: {
         type: DataTypes.STRING(18),
-        allowNull: true
+        allowNull: false,
+        unique: true
       },
       description: {
         type: DataTypes.TEXT,
@@ -119,8 +120,12 @@ export function initProfessionalProfileModel(sequelize: Sequelize) {
     },
     {
       sequelize,
-      tableName: "professional_profiles",
+      tableName: "professionals",
       indexes: [
+        {
+          unique: true,
+          fields: ["cpf"]
+        },
         {
           fields: ["approvalStatus"]
         },
@@ -131,5 +136,9 @@ export function initProfessionalProfileModel(sequelize: Sequelize) {
     }
   );
 
-  return ProfessionalProfile;
+  return Professional;
 }
+
+// Transitional aliases to avoid breaking imports during refactor.
+export { Professional as ProfessionalProfile };
+export const initProfessionalProfileModel = initProfessionalModel;

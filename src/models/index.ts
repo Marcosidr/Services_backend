@@ -2,13 +2,13 @@ import type { Sequelize } from "sequelize";
 import { initUserModel, User } from "./User";
 import { initCategoryModel, Category } from "./Category";
 import { initUserCategoryModel, UserCategory } from "./UserCategory";
-import { initProfessionalProfileModel, ProfessionalProfile } from "./ProfessionalProfile";
+import { initProfessionalModel, Professional } from "./ProfessionalProfile";
 
 export function initModels(sequelize: Sequelize) {
   initUserModel(sequelize);
   initCategoryModel(sequelize);
   initUserCategoryModel(sequelize);
-  initProfessionalProfileModel(sequelize);
+  initProfessionalModel(sequelize);
 
   User.belongsToMany(Category, {
     through: UserCategory,
@@ -24,12 +24,12 @@ export function initModels(sequelize: Sequelize) {
     as: "users"
   });
 
-  User.hasOne(ProfessionalProfile, {
+  User.hasOne(Professional, {
     foreignKey: "userId",
-    as: "professionalProfile"
+    as: "professional"
   });
 
-  ProfessionalProfile.belongsTo(User, {
+  Professional.belongsTo(User, {
     foreignKey: "userId",
     as: "user"
   });
@@ -38,4 +38,4 @@ export function initModels(sequelize: Sequelize) {
 export { User };
 export { Category };
 export { UserCategory };
-export { ProfessionalProfile };
+export { Professional };

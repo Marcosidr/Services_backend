@@ -8,7 +8,7 @@ import {
   Sequelize
 } from "sequelize";
 import type { Category } from "./Category";
-import type { ProfessionalProfile } from "./ProfessionalProfile";
+import type { Professional } from "./ProfessionalProfile";
 
 type UserAttributes = InferAttributes<User, { omit: "createdAt" | "updatedAt" | "categories" }>;
 type UserCreationAttributes = InferCreationAttributes<
@@ -24,7 +24,7 @@ export class User extends Model<UserAttributes, UserCreationAttributes> {
   declare password: string | null;
   declare role: CreationOptional<"user" | "professional" | "admin">;
   declare categories?: NonAttribute<Category[]>;
-  declare professionalProfile?: NonAttribute<ProfessionalProfile>;
+  declare professional?: NonAttribute<Professional>;
   declare createdAt: CreationOptional<Date>;
   declare updatedAt: CreationOptional<Date>;
 }

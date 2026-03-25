@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { Op, Transaction } from "sequelize";
-import { Category, ProfessionalProfile, User, UserCategory } from "../models";
+import { Category, Professional, User, UserCategory } from "../models";
+import { isValidCpf, normalizeCpf } from "../utils/cpf";
 
 type RegisterProfessionalBody = {
   name?: string;
@@ -20,8 +21,33 @@ type RegisterProfessionalBody = {
   "categoryIds[]"?: unknown;
 };
 
+type UpgradeProfessionalBody = {
+  userId?: unknown;
+  cpf?: string;
+  description?: string;
+  experience?: string;
+  price?: string | number;
+  priceUnit?: string;
+  area?: string | number;
+  cep?: string;
+  city?: string;
+  online?: boolean | string;
+  categoryIds?: unknown;
+  categoryId?: unknown;
+  "categoryIds[]"?: unknown;
+};
+
 function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
+}
+
+function parseUserId(value: unknown) {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return value;
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
+    const parsed = Number(value.trim());
+    if (Number.isSafeInteger(parsed) && parsed > 0) return parsed;
+  }
+  return null;
 }
 
 function parseProfessionalId(value: unknown) {
@@ -108,7 +134,7 @@ function categoriesInclude() {
       through: { attributes: [] }
     },
     {
-      association: "professionalProfile",
+      association: "professional",
       attributes: [
         "id",
         "cpf",
@@ -130,30 +156,90 @@ function categoriesInclude() {
 
 function sanitizeProfessional(user: User) {
   const categories = (user.get("categories") as Category[] | undefined) ?? [];
-  const profile = user.get("professionalProfile") as ProfessionalProfile | undefined;
+  const professional = user.get("professional") as Professional | undefined;
 
   const categoryLabels = categories.map((category) => category.label);
 
   return {
     id: String(user.id),
     name: user.name,
-    photo: profile?.photoUrl ?? "",
-    online: Boolean(profile?.online),
-    verified: Boolean(profile?.verified),
+    photo: professional?.photoUrl ?? "",
+    online: Boolean(professional?.online),
+    verified: Boolean(professional?.verified),
     categoryLabel: categoryLabels.join(" / "),
     rating: 0,
     reviews: 0,
-    city: profile?.city ?? "",
+    city: professional?.city ?? "",
     distance: 0,
     completedJobs: 0,
-    area: profile?.areaKm ?? 10,
-    description: profile?.description ?? "",
+    area: professional?.areaKm ?? 10,
+    description: professional?.description ?? "",
     tags: categoryLabels,
-    price: Number(profile?.price ?? 0),
-    priceUnit: profile?.priceUnit ?? "servico",
+    price: Number(professional?.price ?? 0),
+    priceUnit: professional?.priceUnit ?? "servico",
     phone: user.phone ?? "",
     reviewList: []
   };
+}
+
+async function categoriesAreValid(categoryIds: number[]) {
+  const categoriesCount = await Category.count({
+    where: {
+      id: {
+        [Op.in]: categoryIds
+      },
+      is_active: true
+    }
+  });
+
+  return categoriesCount === categoryIds.length;
+}
+
+async function saveProfessionalData(
+  user: User,
+  professionalBody: {
+    cpf: string;
+    description: string;
+    experience?: string;
+    price?: string | number;
+    priceUnit?: string;
+    area?: string | number;
+    cep?: string;
+    city?: string;
+    online?: boolean | string;
+  },
+  categoryIds: number[],
+  transaction: Transaction
+) {
+  const parsedPrice = parseOptionalNumber(professionalBody.price);
+  const parsedArea = parseOptionalNumber(professionalBody.area);
+
+  await Professional.create(
+    {
+      userId: user.id,
+      cpf: professionalBody.cpf,
+      description: professionalBody.description.trim(),
+      experience: professionalBody.experience?.trim() || null,
+      price: parsedPrice,
+      priceUnit: professionalBody.priceUnit?.trim() || "servico",
+      areaKm: parsedArea && parsedArea > 0 ? Math.round(parsedArea) : 10,
+      cep: professionalBody.cep?.trim() || null,
+      city: professionalBody.city?.trim() || null,
+      online: parseOnlineFlag(professionalBody.online),
+      verified: false,
+      approvalStatus: "pending",
+      photoUrl: null
+    },
+    { transaction }
+  );
+
+  await UserCategory.bulkCreate(
+    categoryIds.map((currentCategoryId) => ({
+      userId: user.id,
+      categoryId: currentCategoryId
+    })),
+    { transaction, ignoreDuplicates: true }
+  );
 }
 
 export class ProfessionalsController {
@@ -184,9 +270,9 @@ export class ProfessionalsController {
           : categoryId
       ) ?? null;
 
-    if (!name || !email || !phone || !cpf) {
+    if (!email || !cpf) {
       return res.status(400).json({
-        message: "name, email, phone e cpf sao obrigatorios"
+        message: "email e cpf sao obrigatorios"
       });
     }
 
@@ -198,65 +284,81 @@ export class ProfessionalsController {
       return res.status(400).json({ message: "categoryIds invalido" });
     }
 
-    const categoriesCount = await Category.count({
-      where: {
-        id: {
-          [Op.in]: parsedCategoryIds
-        },
-        is_active: true
-      }
-    });
-
-    if (categoriesCount !== parsedCategoryIds.length) {
+    if (!(await categoriesAreValid(parsedCategoryIds))) {
       return res.status(400).json({ message: "Uma ou mais categorias nao existem" });
     }
 
     const normalizedEmail = normalizeEmail(email);
-    const exists = await User.findOne({ where: { email: normalizedEmail } });
-    if (exists) {
-      return res.status(409).json({ message: "Email ja cadastrado" });
+    const normalizedCpf = normalizeCpf(cpf);
+
+    if (!isValidCpf(normalizedCpf)) {
+      return res.status(400).json({ message: "CPF invalido" });
     }
 
-    const parsedPrice = parseOptionalNumber(price);
-    const parsedArea = parseOptionalNumber(area);
+    const existingUser = await User.findOne({ where: { email: normalizedEmail } });
+    const existingProfessionalByCpf = await Professional.findOne({ where: { cpf: normalizedCpf } });
+
+    if (existingProfessionalByCpf && existingProfessionalByCpf.userId !== existingUser?.id) {
+      return res.status(409).json({ message: "CPF ja cadastrado por outro profissional" });
+    }
+
+    if (existingUser?.role === "admin") {
+      return res.status(403).json({ message: "Nao e permitido promover usuario admin para profissional" });
+    }
+
+    if (!existingUser && (!name || !phone)) {
+      return res.status(400).json({
+        message: "name e phone sao obrigatorios ao cadastrar profissional sem usuario previo"
+      });
+    }
+
+    if (existingUser) {
+      const existingProfessional = await Professional.findOne({ where: { userId: existingUser.id } });
+      if (existingProfessional) {
+        return res.status(409).json({ message: "Usuario ja possui cadastro profissional" });
+      }
+    }
 
     const createdUserId = await User.sequelize!.transaction(async (transaction: Transaction) => {
-      const user = await User.create(
-        {
-          name: name.trim(),
-          email: normalizedEmail,
-          phone: phone.trim(),
-          password: null,
-          role: "professional"
-        },
-        { transaction }
-      );
+      let user = existingUser;
 
-      await ProfessionalProfile.create(
-        {
-          userId: user.id,
-          cpf: cpf.trim(),
-          description: description.trim(),
-          experience: experience?.trim() || null,
-          price: parsedPrice,
-          priceUnit: priceUnit?.trim() || "servico",
-          areaKm: parsedArea && parsedArea > 0 ? Math.round(parsedArea) : 10,
-          cep: cep?.trim() || null,
-          city: city?.trim() || null,
-          online: parseOnlineFlag(online),
-          verified: false,
-          approvalStatus: "pending",
-          photoUrl: null
-        },
-        { transaction }
-      );
+      if (!user) {
+        user = await User.create(
+          {
+            name: name!.trim(),
+            email: normalizedEmail,
+            phone: phone!.trim(),
+            password: null,
+            role: "professional"
+          },
+          { transaction }
+        );
+      } else {
+        await user.update(
+          {
+            role: "professional",
+            ...(name ? { name: name.trim() } : {}),
+            ...(phone ? { phone: phone.trim() } : {})
+          },
+          { transaction }
+        );
+      }
 
-      await UserCategory.bulkCreate(
-        parsedCategoryIds.map((currentCategoryId) => ({
-          userId: user.id,
-          categoryId: currentCategoryId
-        })),
-        { transaction }
+      await saveProfessionalData(
+        user,
+        {
+          cpf: normalizedCpf,
+          description,
+          experience,
+          price,
+          priceUnit,
+          area,
+          cep,
+          city,
+          online
+        },
+        parsedCategoryIds,
+        transaction
       );
 
       return user.id;
@@ -277,6 +379,108 @@ export class ProfessionalsController {
     });
   }
 
+  static async upgradeFromUser(req: Request, res: Response) {
+    const {
+      userId,
+      cpf,
+      description,
+      experience,
+      price,
+      priceUnit,
+      area,
+      cep,
+      city,
+      online,
+      categoryIds,
+      categoryId
+    } = req.body as UpgradeProfessionalBody;
+
+    const parsedUserId = parseUserId(userId);
+    if (!parsedUserId) {
+      return res.status(400).json({ message: "userId invalido" });
+    }
+
+    if (!cpf || !description || !description.trim()) {
+      return res.status(400).json({ message: "cpf e description sao obrigatorios" });
+    }
+
+    const parsedCategoryIds =
+      parseCategoryIds(
+        typeof categoryIds !== "undefined"
+          ? categoryIds
+          : typeof req.body["categoryIds[]"] !== "undefined"
+          ? req.body["categoryIds[]"]
+          : categoryId
+      ) ?? null;
+
+    if (parsedCategoryIds === null || parsedCategoryIds.length === 0) {
+      return res.status(400).json({ message: "categoryIds invalido" });
+    }
+
+    if (!(await categoriesAreValid(parsedCategoryIds))) {
+      return res.status(400).json({ message: "Uma ou mais categorias nao existem" });
+    }
+
+    const normalizedCpf = normalizeCpf(cpf);
+    if (!isValidCpf(normalizedCpf)) {
+      return res.status(400).json({ message: "CPF invalido" });
+    }
+
+    const user = await User.findByPk(parsedUserId);
+    if (!user) {
+      return res.status(404).json({ message: "Usuario nao encontrado" });
+    }
+
+    if (user.role === "admin") {
+      return res.status(403).json({ message: "Nao e permitido promover usuario admin para profissional" });
+    }
+
+    const existingProfessional = await Professional.findOne({ where: { userId: parsedUserId } });
+    if (existingProfessional) {
+      return res.status(409).json({ message: "Usuario ja possui cadastro profissional" });
+    }
+
+    const existingProfessionalByCpf = await Professional.findOne({ where: { cpf: normalizedCpf } });
+    if (existingProfessionalByCpf) {
+      return res.status(409).json({ message: "CPF ja cadastrado por outro profissional" });
+    }
+
+    await User.sequelize!.transaction(async (transaction: Transaction) => {
+      await user.update({ role: "professional" }, { transaction });
+
+      await saveProfessionalData(
+        user,
+        {
+          cpf: normalizedCpf,
+          description,
+          experience,
+          price,
+          priceUnit,
+          area,
+          cep,
+          city,
+          online
+        },
+        parsedCategoryIds,
+        transaction
+      );
+    });
+
+    const savedUser = await User.findByPk(parsedUserId, {
+      attributes: ["id", "name", "email", "phone", "role", "createdAt", "updatedAt"],
+      include: categoriesInclude()
+    });
+
+    if (!savedUser) {
+      return res.status(500).json({ message: "Falha ao carregar profissional criado" });
+    }
+
+    return res.status(201).json({
+      message: "Usuario promovido para profissional com sucesso",
+      professional: sanitizeProfessional(savedUser)
+    });
+  }
+
   static async show(req: Request, res: Response) {
     const professionalId = parseProfessionalId(req.params.id);
     if (!professionalId) {
@@ -288,7 +492,7 @@ export class ProfessionalsController {
       include: categoriesInclude()
     });
 
-    if (!professional || !professional.get("professionalProfile")) {
+    if (!professional || !professional.get("professional")) {
       return res.status(404).json({ message: "Profissional nao encontrado" });
     }
 

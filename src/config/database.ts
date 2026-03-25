@@ -26,6 +26,74 @@ const defaultCategories = [
   { slug: "REPAROS_GERAIS", label: "Reparos Gerais", icon: "hammer", is_active: true }
 ] as const;
 
+async function migrateLegacyProfessionals(sequelizeInstance: Sequelize) {
+  const migrationQuery = `
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM information_schema.tables
+    WHERE table_schema = 'public'
+      AND table_name = 'professional_profiles'
+  ) AND EXISTS (
+    SELECT 1
+    FROM information_schema.tables
+    WHERE table_schema = 'public'
+      AND table_name = 'professionals'
+  ) THEN
+    INSERT INTO professionals (
+      "userId",
+      cpf,
+      description,
+      experience,
+      price,
+      "priceUnit",
+      "areaKm",
+      cep,
+      city,
+      online,
+      verified,
+      "approvalStatus",
+      "photoUrl",
+      "createdAt",
+      "updatedAt"
+    )
+    SELECT
+      pp."userId",
+      regexp_replace(pp.cpf, '\\\\D', '', 'g'),
+      pp.description,
+      pp.experience,
+      pp.price,
+      pp."priceUnit",
+      pp."areaKm",
+      pp.cep,
+      pp.city,
+      pp.online,
+      pp.verified,
+      pp."approvalStatus",
+      pp."photoUrl",
+      pp."createdAt",
+      pp."updatedAt"
+    FROM professional_profiles pp
+    WHERE pp.cpf IS NOT NULL
+      AND regexp_replace(pp.cpf, '\\\\D', '', 'g') <> ''
+      AND NOT EXISTS (
+        SELECT 1
+        FROM professionals p
+        WHERE p."userId" = pp."userId"
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM professionals p
+        WHERE p.cpf = regexp_replace(pp.cpf, '\\\\D', '', 'g')
+      );
+  END IF;
+END $$;
+`;
+
+  await sequelizeInstance.query(migrationQuery);
+}
+
 export function getSequelize() {
   if (sequelize) return sequelize;
 
@@ -58,6 +126,7 @@ export async function initDatabase() {
   // Se precisar, ative explicitamente com DB_SYNC_ALTER=true no ambiente.
   const useAlter = process.env.DB_SYNC_ALTER === "true";
   await sequelizeInstance.sync(useAlter ? { alter: true } : undefined);
+  await migrateLegacyProfessionals(sequelizeInstance);
 
   const categoryCount = await Category.count();
   if (categoryCount === 0) {
