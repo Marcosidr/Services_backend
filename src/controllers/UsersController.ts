@@ -1,5 +1,6 @@
 import type { Request, Response } from "express";
 import { Category, User } from "../models";
+import { isValidCep, normalizeCep } from "../utils/cep";
 import { isValidCpf, normalizeCpf } from "../utils/cpf";
 import { getEmailValidationError, normalizeEmail } from "../utils/email";
 import { getPasswordValidationError, hashPassword } from "../utils/password";
@@ -21,6 +22,14 @@ type UserPayload = {
   email?: string;
   cpf?: string;
   phone?: string;
+  cep?: string;
+  endereco?: string;
+  numero?: string;
+  complemento?: string;
+  bairro?: string;
+  cidade?: string;
+  uf?: string;
+  estado?: string;
   password?: string;
   role?: UserRole;
   categoryId?: number | string;
@@ -46,6 +55,14 @@ function sanitizeUser(user: User) {
     email: user.email,
     cpf: user.cpf,
     phone: user.phone,
+    cep: user.cep,
+    endereco: user.endereco,
+    numero: user.numero,
+    complemento: user.complemento,
+    bairro: user.bairro,
+    cidade: user.cidade,
+    uf: user.uf,
+    estado: user.estado,
     role: user.role,
     categories: userCategories.map((category) => ({
       id: category.id,
@@ -63,11 +80,34 @@ function hasCategoryPayload(payload: UserPayload) {
   return typeof payload.categoryId !== "undefined" || typeof payload.categoryIds !== "undefined";
 }
 
+function normalizeOptionalText(value: string | undefined) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
 export class UsersController {
   static async index(req: Request, res: Response) {
     const users = await User.findAll({
       order: [["createdAt", "DESC"]],
-      attributes: ["id", "name", "email", "cpf", "phone", "role", "createdAt", "updatedAt"],
+      attributes: [
+        "id",
+        "name",
+        "email",
+        "cpf",
+        "phone",
+        "cep",
+        "endereco",
+        "numero",
+        "complemento",
+        "bairro",
+        "cidade",
+        "uf",
+        "estado",
+        "role",
+        "createdAt",
+        "updatedAt"
+      ],
       include: categoriesInclude()
     });
     return res.json(users.map(sanitizeUser));
@@ -80,7 +120,24 @@ export class UsersController {
     if (id === null) return res.status(400).json({ message: "id invalido" });
 
     const user = await User.findByPk(id, {
-      attributes: ["id", "name", "email", "cpf", "phone", "role", "createdAt", "updatedAt"],
+      attributes: [
+        "id",
+        "name",
+        "email",
+        "cpf",
+        "phone",
+        "cep",
+        "endereco",
+        "numero",
+        "complemento",
+        "bairro",
+        "cidade",
+        "uf",
+        "estado",
+        "role",
+        "createdAt",
+        "updatedAt"
+      ],
       include: categoriesInclude()
     });
     if (!user) return res.status(404).json({ message: "Usuario nao encontrado" });
@@ -89,7 +146,24 @@ export class UsersController {
   }
 
   static async store(req: Request, res: Response) {
-    const { name, email, cpf, phone, password, role, categoryId, categoryIds } = req.body as UserPayload;
+    const {
+      name,
+      email,
+      cpf,
+      phone,
+      cep,
+      endereco,
+      numero,
+      complemento,
+      bairro,
+      cidade,
+      uf,
+      estado,
+      password,
+      role,
+      categoryId,
+      categoryIds
+    } = req.body as UserPayload;
 
     if (typeof categoryId !== "undefined" || typeof categoryIds !== "undefined") {
       return res.status(400).json({
@@ -97,8 +171,10 @@ export class UsersController {
       });
     }
 
-    if (!name || !email || !cpf || !password) {
-      return res.status(400).json({ message: "name, email, cpf e password sao obrigatorios" });
+    if (!name || !email || !cpf || !password || !cep || !endereco || !numero || !bairro || !cidade || !uf) {
+      return res.status(400).json({
+        message: "name, email, cpf, password, cep, endereco, numero, bairro, cidade e uf sao obrigatorios"
+      });
     }
 
     const emailValidationError = getEmailValidationError(email);
@@ -114,6 +190,15 @@ export class UsersController {
     const normalizedCpf = normalizeCpf(cpf);
     if (!isValidCpf(normalizedCpf)) {
       return res.status(400).json({ message: "CPF invalido" });
+    }
+
+    const normalizedCep = normalizeCep(cep);
+    if (!isValidCep(normalizedCep)) {
+      return res.status(400).json({ message: "CEP invalido" });
+    }
+
+    if (!/^[a-zA-Z]{2}$/.test(uf.trim())) {
+      return res.status(400).json({ message: "UF invalida" });
     }
 
     if (typeof phone === "string" && phone.trim()) {
@@ -138,12 +223,37 @@ export class UsersController {
       email: normalizedEmail,
       cpf: normalizedCpf,
       phone: typeof phone === "string" && phone.trim() ? normalizePhone(phone) : null,
+      cep: normalizedCep,
+      endereco: endereco.trim(),
+      numero: numero.trim(),
+      complemento: normalizeOptionalText(complemento),
+      bairro: bairro.trim(),
+      cidade: cidade.trim(),
+      uf: uf.trim().toUpperCase(),
+      estado: normalizeOptionalText(estado),
       password: hashPassword(password),
       role: role ?? "user"
     });
 
     const savedUser = await User.findByPk(user.id, {
-      attributes: ["id", "name", "email", "cpf", "phone", "role", "createdAt", "updatedAt"],
+      attributes: [
+        "id",
+        "name",
+        "email",
+        "cpf",
+        "phone",
+        "cep",
+        "endereco",
+        "numero",
+        "complemento",
+        "bairro",
+        "cidade",
+        "uf",
+        "estado",
+        "role",
+        "createdAt",
+        "updatedAt"
+      ],
       include: categoriesInclude()
     });
 
@@ -156,7 +266,8 @@ export class UsersController {
     const id = parseUserId(idParam);
     if (id === null) return res.status(400).json({ message: "id invalido" });
 
-    const { name, email, cpf, phone, password, role } = req.body as UserPayload;
+    const { name, email, cpf, phone, cep, endereco, numero, complemento, bairro, cidade, uf, estado, password, role } =
+      req.body as UserPayload;
 
     if (hasCategoryPayload(req.body as UserPayload)) {
       return res.status(400).json({
@@ -164,7 +275,22 @@ export class UsersController {
       });
     }
 
-    if (!name && !email && !cpf && typeof phone === "undefined" && !password && !role) {
+    if (
+      !name &&
+      !email &&
+      !cpf &&
+      typeof phone === "undefined" &&
+      typeof cep === "undefined" &&
+      typeof endereco === "undefined" &&
+      typeof numero === "undefined" &&
+      typeof complemento === "undefined" &&
+      typeof bairro === "undefined" &&
+      typeof cidade === "undefined" &&
+      typeof uf === "undefined" &&
+      typeof estado === "undefined" &&
+      !password &&
+      !role
+    ) {
       return res.status(400).json({ message: "Informe ao menos um campo para atualizar" });
     }
 
@@ -210,6 +336,16 @@ export class UsersController {
       }
     }
 
+    if (typeof cep === "string" && cep.trim()) {
+      if (!isValidCep(cep)) {
+        return res.status(400).json({ message: "CEP invalido" });
+      }
+    }
+
+    if (typeof uf === "string" && uf.trim() && !/^[a-zA-Z]{2}$/.test(uf.trim())) {
+      return res.status(400).json({ message: "UF invalida" });
+    }
+
     if (role && role !== "user" && role !== "professional" && role !== "admin") {
       return res.status(400).json({ message: "role invalida" });
     }
@@ -226,12 +362,69 @@ export class UsersController {
                 : null
           }
         : {}),
+      ...(typeof cep !== "undefined"
+        ? {
+            cep: typeof cep === "string" && cep.trim() ? normalizeCep(cep) : null
+          }
+        : {}),
+      ...(typeof endereco !== "undefined"
+        ? {
+            endereco: normalizeOptionalText(endereco)
+          }
+        : {}),
+      ...(typeof numero !== "undefined"
+        ? {
+            numero: normalizeOptionalText(numero)
+          }
+        : {}),
+      ...(typeof complemento !== "undefined"
+        ? {
+            complemento: normalizeOptionalText(complemento)
+          }
+        : {}),
+      ...(typeof bairro !== "undefined"
+        ? {
+            bairro: normalizeOptionalText(bairro)
+          }
+        : {}),
+      ...(typeof cidade !== "undefined"
+        ? {
+            cidade: normalizeOptionalText(cidade)
+          }
+        : {}),
+      ...(typeof uf !== "undefined"
+        ? {
+            uf: typeof uf === "string" && uf.trim() ? uf.trim().toUpperCase() : null
+          }
+        : {}),
+      ...(typeof estado !== "undefined"
+        ? {
+            estado: normalizeOptionalText(estado)
+          }
+        : {}),
       ...(password ? { password: hashPassword(password) } : {}),
       ...(role ? { role } : {})
     });
 
     const savedUser = await User.findByPk(id, {
-      attributes: ["id", "name", "email", "cpf", "phone", "role", "createdAt", "updatedAt"],
+      attributes: [
+        "id",
+        "name",
+        "email",
+        "cpf",
+        "phone",
+        "cep",
+        "endereco",
+        "numero",
+        "complemento",
+        "bairro",
+        "cidade",
+        "uf",
+        "estado",
+        "role",
+        "createdAt",
+        "updatedAt"
+      ],
       include: categoriesInclude()
     });
 

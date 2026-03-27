@@ -22,6 +22,14 @@ export class User extends Model<UserAttributes, UserCreationAttributes> {
   declare email: string;
   declare cpf: string | null;
   declare phone: string | null;
+  declare cep: string | null;
+  declare endereco: string | null;
+  declare numero: string | null;
+  declare complemento: string | null;
+  declare bairro: string | null;
+  declare cidade: string | null;
+  declare uf: string | null;
+  declare estado: string | null;
   declare password: string | null;
   declare role: CreationOptional<"user" | "professional" | "admin">;
   declare categories?: NonAttribute<Category[]>;
@@ -58,6 +66,41 @@ export function initUserModel(sequelize: Sequelize) {
       },
       phone: {
         type: DataTypes.STRING(32),
+        allowNull: true
+      },
+      cep: {
+        type: DataTypes.STRING(8),
+        allowNull: true,
+        validate: {
+          is: /^\d{8}$/
+        }
+      },
+      endereco: {
+        type: DataTypes.STRING(180),
+        allowNull: true
+      },
+      numero: {
+        type: DataTypes.STRING(20),
+        allowNull: true
+      },
+      complemento: {
+        type: DataTypes.STRING(120),
+        allowNull: true
+      },
+      bairro: {
+        type: DataTypes.STRING(120),
+        allowNull: true
+      },
+      cidade: {
+        type: DataTypes.STRING(120),
+        allowNull: true
+      },
+      uf: {
+        type: DataTypes.STRING(2),
+        allowNull: true
+      },
+      estado: {
+        type: DataTypes.STRING(120),
         allowNull: true
       },
       password: {

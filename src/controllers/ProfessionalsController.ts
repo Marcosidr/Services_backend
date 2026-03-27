@@ -1,8 +1,10 @@
 import type { Request, Response } from "express";
 import { Op, Transaction } from "sequelize";
 import { Category, Professional, User, UserCategory } from "../models";
+import { isValidCep, normalizeCep } from "../utils/cep";
 import { isValidCpf, normalizeCpf } from "../utils/cpf";
 import { getEmailValidationError, normalizeEmail } from "../utils/email";
+import { getPasswordValidationError, hashPassword, verifyPassword } from "../utils/password";
 import { getPhoneValidationError, normalizePhone } from "../utils/phone";
 
 type RegisterProfessionalBody = {
@@ -10,13 +12,20 @@ type RegisterProfessionalBody = {
   email?: string;
   phone?: string;
   cpf?: string;
+  password?: string;
   description?: string;
   experience?: string;
   price?: string | number;
   priceUnit?: string;
   area?: string | number;
   cep?: string;
+  endereco?: string;
+  numero?: string;
+  complemento?: string;
+  bairro?: string;
   city?: string;
+  uf?: string;
+  estado?: string;
   online?: boolean | string;
   categoryIds?: unknown;
   categoryId?: unknown;
@@ -26,6 +35,7 @@ type RegisterProfessionalBody = {
 type UpgradeProfessionalBody = {
   userId?: unknown;
   cpf?: string;
+  password?: string;
   description?: string;
   experience?: string;
   price?: string | number;
@@ -136,6 +146,12 @@ function parseOnlineFlag(value: unknown) {
   }
 
   return false;
+}
+
+function normalizeOptionalText(value: string | undefined) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
 }
 
 function categoriesInclude() {
@@ -303,13 +319,20 @@ export class ProfessionalsController {
       email,
       phone,
       cpf,
+      password,
       description,
       experience,
       price,
       priceUnit,
       area,
       cep,
+      endereco,
+      numero,
+      complemento,
+      bairro,
       city,
+      uf,
+      estado,
       online,
       categoryIds,
       categoryId
@@ -324,9 +347,9 @@ export class ProfessionalsController {
           : categoryId
       ) ?? null;
 
-    if (!email || !cpf) {
+    if (!email || !cpf || !password) {
       return res.status(400).json({
-        message: "email e cpf sao obrigatorios"
+        message: "email, cpf e password sao obrigatorios"
       });
     }
 
@@ -337,6 +360,11 @@ export class ProfessionalsController {
     const emailValidationError = getEmailValidationError(email);
     if (emailValidationError) {
       return res.status(400).json({ message: emailValidationError });
+    }
+
+    const passwordValidationError = getPasswordValidationError(password);
+    if (passwordValidationError) {
+      return res.status(400).json({ message: passwordValidationError });
     }
 
     if (parsedCategoryIds === null || parsedCategoryIds.length === 0) {
@@ -354,14 +382,57 @@ export class ProfessionalsController {
       return res.status(400).json({ message: "CPF invalido" });
     }
 
-    if (typeof phone !== "undefined") {
-      const phoneValidationError = getPhoneValidationError(String(phone));
-      if (phoneValidationError) {
-        return res.status(400).json({ message: phoneValidationError });
-      }
+    if (!phone) {
+      return res.status(400).json({ message: "phone e obrigatorio" });
     }
 
-    const existingUser = await User.findOne({ where: { email: normalizedEmail } });
+    const phoneValidationError = getPhoneValidationError(phone);
+    if (phoneValidationError) {
+      return res.status(400).json({ message: phoneValidationError });
+    }
+
+    if (!cep || !isValidCep(cep)) {
+      return res.status(400).json({ message: "CEP invalido" });
+    }
+
+    if (!endereco || !endereco.trim()) {
+      return res.status(400).json({ message: "endereco e obrigatorio" });
+    }
+
+    if (!numero || !numero.trim()) {
+      return res.status(400).json({ message: "numero e obrigatorio" });
+    }
+
+    if (!bairro || !bairro.trim()) {
+      return res.status(400).json({ message: "bairro e obrigatorio" });
+    }
+
+    if (!city || !city.trim()) {
+      return res.status(400).json({ message: "city e obrigatorio" });
+    }
+
+    if (!uf || !/^[a-zA-Z]{2}$/.test(uf.trim())) {
+      return res.status(400).json({ message: "UF invalida" });
+    }
+
+    const normalizedCep = normalizeCep(cep);
+    const normalizedPhone = normalizePhone(phone);
+    const normalizedUf = uf.trim().toUpperCase();
+
+    const existingUserByEmail = await User.findOne({ where: { email: normalizedEmail } });
+    const existingUserByCpf = await User.findOne({ where: { cpf: normalizedCpf } });
+    let existingUser: User | null = null;
+
+    if (existingUserByEmail && existingUserByCpf) {
+      if (existingUserByEmail.id !== existingUserByCpf.id) {
+        return res.status(409).json({ message: "Email e CPF pertencem a usuarios diferentes" });
+      }
+
+      existingUser = existingUserByEmail;
+    } else {
+      existingUser = existingUserByEmail ?? existingUserByCpf;
+    }
+
     const existingProfessionalByCpf = await Professional.findOne({ where: { cpf: normalizedCpf } });
 
     if (existingProfessionalByCpf && existingProfessionalByCpf.userId !== existingUser?.id) {
@@ -376,9 +447,13 @@ export class ProfessionalsController {
       return res.status(409).json({ message: "CPF informado nao confere com o usuario existente" });
     }
 
-    if (!existingUser && (!name || !phone)) {
+    if (existingUser && existingUser.email !== normalizedEmail) {
+      return res.status(409).json({ message: "Email informado nao confere com o usuario existente" });
+    }
+
+    if (!existingUser && !name) {
       return res.status(400).json({
-        message: "name e phone sao obrigatorios ao cadastrar profissional sem usuario previo"
+        message: "name e obrigatorio ao cadastrar profissional sem usuario previo"
       });
     }
 
@@ -386,6 +461,10 @@ export class ProfessionalsController {
       const existingProfessional = await Professional.findOne({ where: { userId: existingUser.id } });
       if (existingProfessional) {
         return res.status(409).json({ message: "Usuario ja possui cadastro profissional" });
+      }
+
+      if (existingUser.password && !verifyPassword(password, existingUser.password)) {
+        return res.status(401).json({ message: "Senha invalida para o usuario informado" });
       }
     }
 
@@ -398,8 +477,16 @@ export class ProfessionalsController {
             name: name!.trim(),
             email: normalizedEmail,
             cpf: normalizedCpf,
-            phone: normalizePhone(phone!),
-            password: null,
+            phone: normalizedPhone,
+            cep: normalizedCep,
+            endereco: endereco.trim(),
+            numero: numero.trim(),
+            complemento: normalizeOptionalText(complemento),
+            bairro: bairro.trim(),
+            cidade: city.trim(),
+            uf: normalizedUf,
+            estado: normalizeOptionalText(estado),
+            password: hashPassword(password),
             role: "professional"
           },
           { transaction }
@@ -409,8 +496,18 @@ export class ProfessionalsController {
           {
             role: "professional",
             ...(name ? { name: name.trim() } : {}),
+            ...(email ? { email: normalizedEmail } : {}),
             ...(!user.cpf ? { cpf: normalizedCpf } : {}),
-            ...(phone ? { phone: normalizePhone(phone) } : {})
+            ...(phone ? { phone: normalizedPhone } : {}),
+            ...(cep ? { cep: normalizedCep } : {}),
+            ...(endereco ? { endereco: endereco.trim() } : {}),
+            ...(numero ? { numero: numero.trim() } : {}),
+            ...(typeof complemento !== "undefined" ? { complemento: normalizeOptionalText(complemento) } : {}),
+            ...(bairro ? { bairro: bairro.trim() } : {}),
+            ...(city ? { cidade: city.trim() } : {}),
+            ...(uf ? { uf: normalizedUf } : {}),
+            ...(typeof estado !== "undefined" ? { estado: normalizeOptionalText(estado) } : {}),
+            ...(!user.password ? { password: hashPassword(password) } : {})
           },
           { transaction }
         );
@@ -425,8 +522,8 @@ export class ProfessionalsController {
           price,
           priceUnit,
           area,
-          cep,
-          city,
+          cep: normalizedCep,
+          city: city.trim(),
           online
         },
         parsedCategoryIds,
@@ -455,6 +552,7 @@ export class ProfessionalsController {
     const {
       userId,
       cpf,
+      password,
       description,
       experience,
       price,
@@ -517,8 +615,25 @@ export class ProfessionalsController {
       return res.status(409).json({ message: "CPF ja cadastrado por outro profissional" });
     }
 
+    if (!user.password) {
+      if (!password) {
+        return res.status(400).json({ message: "password e obrigatorio para concluir o cadastro profissional" });
+      }
+
+      const passwordValidationError = getPasswordValidationError(password);
+      if (passwordValidationError) {
+        return res.status(400).json({ message: passwordValidationError });
+      }
+    }
+
     await User.sequelize!.transaction(async (transaction: Transaction) => {
-      await user.update({ role: "professional" }, { transaction });
+      await user.update(
+        {
+          role: "professional",
+          ...(!user.password && password ? { password: hashPassword(password) } : {})
+        },
+        { transaction }
+      );
 
       await saveProfessionalData(
         user,
