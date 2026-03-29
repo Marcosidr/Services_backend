@@ -7,6 +7,7 @@ import authRouter from "./routes/auth.routes";
 import dashboardRouter from "./routes/dashboard.routes";
 import categoryRouter from "./routes/categories.router";
 import professionalsRouter from "./routes/professionals.routes";
+import adminRouter from "./routes/admin.routes";
 import { initDatabase } from "./config/database";
 
 
@@ -40,6 +41,7 @@ app.use("/api/users", usersRouter);
 app.use("/api/dashboard", dashboardRouter);
 app.use("/api/categories", categoryRouter);
 app.use("/api/professionals", professionalsRouter);
+app.use("/api/admin", adminRouter);
 
 
 const PORT = Number(process.env.PORT) || 3000;

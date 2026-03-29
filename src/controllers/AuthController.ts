@@ -58,6 +58,20 @@ function publicUser(user: User) {
 }
 
 export class AuthController {
+  static async me(req: Request, res: Response) {
+    const authenticatedUserId = req.user?.id ?? null;
+    if (!authenticatedUserId) {
+      return res.status(401).json({ message: "Token de autenticacao invalido ou ausente" });
+    }
+
+    const user = await User.findByPk(authenticatedUserId);
+    if (!user) {
+      return res.status(401).json({ message: "Usuario da sessao nao encontrado" });
+    }
+
+    return res.json({ user: publicUser(user) });
+  }
+
   static async lookupByCpf(req: Request<CpfLookupParams>, res: Response) {
     const rawCpf = typeof req.params.cpf === "string" ? req.params.cpf : "";
     const normalizedCpf = normalizeCpf(rawCpf);
