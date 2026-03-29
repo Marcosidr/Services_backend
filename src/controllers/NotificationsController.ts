@@ -127,6 +127,24 @@ export class NotificationsController {
     return res.status(200).json({ message: "Notificacoes marcadas como lidas" });
   }
 
+  static async clearAll(req: Request, res: Response) {
+    const authenticatedUserId = req.user?.id ?? null;
+    if (!authenticatedUserId) {
+      return res.status(401).json({ message: "Token de autenticacao invalido ou ausente" });
+    }
+
+    const deletedCount = await Notification.destroy({
+      where: {
+        userId: authenticatedUserId
+      }
+    });
+
+    return res.status(200).json({
+      message: "Notificacoes removidas com sucesso",
+      deletedCount
+    });
+  }
+
   static async destroy(req: Request<{ id: string }>, res: Response) {
     const authenticatedUserId = req.user?.id ?? null;
     if (!authenticatedUserId) {

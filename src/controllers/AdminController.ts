@@ -1,9 +1,23 @@
 import type { Request, Response } from "express";
-import { Category, Professional, User } from "../models";
+import { Category, Notification, Professional, User } from "../models";
 import { createNotification } from "../services/notificationService";
 
 type AdminUserStatus = "ativo" | "bloqueado";
 type ProfessionalStatus = "online" | "offline";
+type AdminAnnouncementPayload = {
+  userId?: number | string;
+  title?: string;
+  message?: string;
+};
+
+function parsePositiveInteger(value: unknown) {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return value;
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
+    const parsed = Number(value.trim());
+    if (Number.isSafeInteger(parsed) && parsed > 0) return parsed;
+  }
+  return null;
+}
 
 function parseProfessionalId(value: unknown) {
   if (Array.isArray(value)) return null;
@@ -245,5 +259,159 @@ export class AdminController {
     });
 
     return res.status(200).json({ message: "Profissional recusado com sucesso" });
+  }
+
+  static async listAnnouncements(req: Request, res: Response) {
+    const announcements = await Notification.findAll({
+      where: { type: "admin_notice" },
+      include: [
+        {
+          association: "user",
+          attributes: ["id", "name", "email"]
+        }
+      ],
+      order: [["createdAt", "DESC"]],
+      limit: 100
+    });
+
+    return res.json(
+      announcements.map((announcement) => {
+        const user = announcement.get("user") as User | undefined;
+
+        return {
+          id: String(announcement.id),
+          userId: announcement.userId,
+          userName: user?.name ?? "",
+          userEmail: user?.email ?? "",
+          title: announcement.title,
+          message: announcement.message,
+          isRead: announcement.isRead,
+          createdAt: announcement.createdAt
+        };
+      })
+    );
+  }
+
+  static async createAnnouncement(
+    req: Request<unknown, unknown, AdminAnnouncementPayload>,
+    res: Response
+  ) {
+    const parsedUserId = parsePositiveInteger(req.body.userId);
+    if (!parsedUserId) {
+      return res.status(400).json({ message: "userId invalido" });
+    }
+
+    const title = typeof req.body.title === "string" ? req.body.title.trim() : "";
+    const message = typeof req.body.message === "string" ? req.body.message.trim() : "";
+    if (!title || !message) {
+      return res.status(400).json({ message: "title e message sao obrigatorios" });
+    }
+
+    const targetUser = await User.findByPk(parsedUserId, {
+      attributes: ["id", "name", "email"]
+    });
+    if (!targetUser) {
+      return res.status(404).json({ message: "Usuario destino nao encontrado" });
+    }
+
+    const announcement = await Notification.create({
+      userId: parsedUserId,
+      type: "admin_notice",
+      title,
+      message,
+      metadata: {
+        createdByAdminId: req.user?.id ?? null
+      }
+    });
+
+    return res.status(201).json({
+      id: String(announcement.id),
+      userId: announcement.userId,
+      userName: targetUser.name,
+      userEmail: targetUser.email,
+      title: announcement.title,
+      message: announcement.message,
+      isRead: announcement.isRead,
+      createdAt: announcement.createdAt
+    });
+  }
+
+  static async updateAnnouncement(
+    req: Request<{ id: string }, unknown, AdminAnnouncementPayload>,
+    res: Response
+  ) {
+    const announcementId = parsePositiveInteger(req.params.id);
+    if (!announcementId) {
+      return res.status(400).json({ message: "id invalido" });
+    }
+
+    const announcement = await Notification.findByPk(announcementId);
+    if (!announcement || announcement.type !== "admin_notice") {
+      return res.status(404).json({ message: "Aviso nao encontrado" });
+    }
+
+    const nextUserId =
+      typeof req.body.userId === "undefined"
+        ? announcement.userId
+        : parsePositiveInteger(req.body.userId);
+    if (!nextUserId) {
+      return res.status(400).json({ message: "userId invalido" });
+    }
+
+    const title =
+      typeof req.body.title === "undefined"
+        ? announcement.title
+        : typeof req.body.title === "string"
+        ? req.body.title.trim()
+        : "";
+    const message =
+      typeof req.body.message === "undefined"
+        ? announcement.message
+        : typeof req.body.message === "string"
+        ? req.body.message.trim()
+        : "";
+
+    if (!title || !message) {
+      return res.status(400).json({ message: "title e message sao obrigatorios" });
+    }
+
+    const targetUser = await User.findByPk(nextUserId, {
+      attributes: ["id", "name", "email"]
+    });
+    if (!targetUser) {
+      return res.status(404).json({ message: "Usuario destino nao encontrado" });
+    }
+
+    await announcement.update({
+      userId: nextUserId,
+      title,
+      message
+    });
+
+    return res.json({
+      id: String(announcement.id),
+      userId: announcement.userId,
+      userName: targetUser.name,
+      userEmail: targetUser.email,
+      title: announcement.title,
+      message: announcement.message,
+      isRead: announcement.isRead,
+      createdAt: announcement.createdAt
+    });
+  }
+
+  static async deleteAnnouncement(req: Request<{ id: string }>, res: Response) {
+    const announcementId = parsePositiveInteger(req.params.id);
+    if (!announcementId) {
+      return res.status(400).json({ message: "id invalido" });
+    }
+
+    const announcement = await Notification.findByPk(announcementId);
+    if (!announcement || announcement.type !== "admin_notice") {
+      return res.status(404).json({ message: "Aviso nao encontrado" });
+    }
+
+    await announcement.destroy();
+    return res.status(204).send();
   }
 }

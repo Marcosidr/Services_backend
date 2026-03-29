@@ -171,9 +171,9 @@ export class UsersController {
       });
     }
 
-    if (!name || !email || !cpf || !password || !cep || !endereco || !numero || !bairro || !cidade || !uf) {
+    if (!name || !email || !cpf || !password) {
       return res.status(400).json({
-        message: "name, email, cpf, password, cep, endereco, numero, bairro, cidade e uf sao obrigatorios"
+        message: "name, email, cpf e password sao obrigatorios"
       });
     }
 
@@ -192,12 +192,14 @@ export class UsersController {
       return res.status(400).json({ message: "CPF invalido" });
     }
 
-    const normalizedCep = normalizeCep(cep);
-    if (!isValidCep(normalizedCep)) {
-      return res.status(400).json({ message: "CEP invalido" });
+    if (typeof cep === "string" && cep.trim()) {
+      const normalizedCep = normalizeCep(cep);
+      if (!isValidCep(normalizedCep)) {
+        return res.status(400).json({ message: "CEP invalido" });
+      }
     }
 
-    if (!/^[a-zA-Z]{2}$/.test(uf.trim())) {
+    if (typeof uf === "string" && uf.trim() && !/^[a-zA-Z]{2}$/.test(uf.trim())) {
       return res.status(400).json({ message: "UF invalida" });
     }
 
@@ -223,13 +225,13 @@ export class UsersController {
       email: normalizedEmail,
       cpf: normalizedCpf,
       phone: typeof phone === "string" && phone.trim() ? normalizePhone(phone) : null,
-      cep: normalizedCep,
-      endereco: endereco.trim(),
-      numero: numero.trim(),
+      cep: typeof cep === "string" && cep.trim() ? normalizeCep(cep) : null,
+      endereco: normalizeOptionalText(endereco),
+      numero: normalizeOptionalText(numero),
       complemento: normalizeOptionalText(complemento),
-      bairro: bairro.trim(),
-      cidade: cidade.trim(),
-      uf: uf.trim().toUpperCase(),
+      bairro: normalizeOptionalText(bairro),
+      cidade: normalizeOptionalText(cidade),
+      uf: typeof uf === "string" && uf.trim() ? uf.trim().toUpperCase() : null,
       estado: normalizeOptionalText(estado),
       password: hashPassword(password),
       role: role ?? "user"
@@ -275,10 +277,12 @@ export class UsersController {
       });
     }
 
+    if (typeof email !== "undefined" || typeof cpf !== "undefined") {
+      return res.status(400).json({ message: "Nao e permitido alterar email ou cpf" });
+    }
+
     if (
       !name &&
-      !email &&
-      !cpf &&
       typeof phone === "undefined" &&
       typeof cep === "undefined" &&
       typeof endereco === "undefined" &&
@@ -297,35 +301,10 @@ export class UsersController {
     const user = await User.findByPk(id);
     if (!user) return res.status(404).json({ message: "Usuario nao encontrado" });
 
-    if (email && email !== user.email) {
-      const emailValidationError = getEmailValidationError(email);
-      if (emailValidationError) {
-        return res.status(400).json({ message: emailValidationError });
-      }
-
-      const normalizedEmail = normalizeEmail(email);
-      const exists = await User.findOne({ where: { email: normalizedEmail } });
-      if (exists) return res.status(409).json({ message: "Email ja cadastrado" });
-    }
-
     if (password) {
       const passwordValidationError = getPasswordValidationError(password);
       if (passwordValidationError) {
         return res.status(400).json({ message: passwordValidationError });
-      }
-    }
-
-    if (cpf) {
-      const normalizedCpf = normalizeCpf(cpf);
-      if (!isValidCpf(normalizedCpf)) {
-        return res.status(400).json({ message: "CPF invalido" });
-      }
-
-      if (normalizedCpf !== user.cpf) {
-        const cpfExists = await User.findOne({ where: { cpf: normalizedCpf } });
-        if (cpfExists) {
-          return res.status(409).json({ message: "CPF ja cadastrado" });
-        }
       }
     }
 
@@ -352,8 +331,6 @@ export class UsersController {
 
     await user.update({
       ...(name ? { name: name.trim() } : {}),
-      ...(email ? { email: normalizeEmail(email) } : {}),
-      ...(cpf ? { cpf: normalizeCpf(cpf) } : {}),
       ...(typeof phone !== "undefined"
         ? {
             phone:
