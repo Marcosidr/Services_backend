@@ -1,5 +1,6 @@
 import type { Request, Response } from "express";
 import { Category, Professional, User } from "../models";
+import { createNotification } from "../services/notificationService";
 
 type AdminUserStatus = "ativo" | "bloqueado";
 type ProfessionalStatus = "online" | "offline";
@@ -189,6 +190,23 @@ export class AdminController {
       verified: true
     });
 
+    await User.update(
+      { role: "professional" },
+      {
+        where: { id: professional.userId }
+      }
+    );
+
+    await createNotification({
+      userId: professional.userId,
+      type: "professional_approved",
+      title: "Cadastro profissional aprovado",
+      message: "Seu perfil foi aprovado e agora esta ativo como profissional.",
+      metadata: {
+        professionalId: professional.id
+      }
+    });
+
     return res.status(200).json({ message: "Profissional aprovado com sucesso" });
   }
 
@@ -207,6 +225,23 @@ export class AdminController {
       approvalStatus: "rejected",
       verified: false,
       online: false
+    });
+
+    await User.update(
+      { role: "user" },
+      {
+        where: { id: professional.userId }
+      }
+    );
+
+    await createNotification({
+      userId: professional.userId,
+      type: "professional_rejected",
+      title: "Cadastro profissional recusado",
+      message: "Seu cadastro profissional foi recusado. Revise os dados e tente novamente.",
+      metadata: {
+        professionalId: professional.id
+      }
     });
 
     return res.status(200).json({ message: "Profissional recusado com sucesso" });

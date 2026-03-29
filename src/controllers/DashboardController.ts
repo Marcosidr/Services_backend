@@ -1,15 +1,10 @@
 import type { Request, Response } from "express";
-import { User } from "../models";
+import { Op } from "sequelize";
+import { Message, User } from "../models";
+import { findOrCreateConversation } from "../services/conversationService";
+import { createNotification } from "../services/notificationService";
 
 type DashboardOrderStatus = "concluido" | "em andamento" | "cancelado" | "aguardando";
-
-type DashboardMessage = {
-  id: string;
-  userId: number;
-  sender: "user" | "professional";
-  text: string;
-  time: string;
-};
 
 type DashboardOrder = {
   id: string;
@@ -23,26 +18,35 @@ type DashboardOrder = {
   rating?: number;
 };
 
-const dashboardMessages: DashboardMessage[] = [];
 const dashboardOrders: DashboardOrder[] = [];
-
-function nowAsPtBrTime() {
-  return new Date().toLocaleTimeString("pt-BR", {
-    hour: "2-digit",
-    minute: "2-digit"
-  });
-}
 
 function getAuthenticatedUserId(req: Request) {
   return req.user?.id ?? null;
 }
 
-function sanitizeDashboardMessage(message: DashboardMessage) {
+function parsePositiveInteger(value: unknown) {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return value;
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
+    const parsed = Number(value.trim());
+    if (Number.isSafeInteger(parsed) && parsed > 0) return parsed;
+  }
+  return null;
+}
+
+function sanitizeDashboardMessage(authenticatedUserId: number, message: Message) {
   return {
-    id: message.id,
-    sender: message.sender,
-    text: message.text,
-    time: message.time
+    id: String(message.id),
+    conversationId: String(message.conversationId),
+    sender: message.senderId === authenticatedUserId ? "user" : "professional",
+    senderId: message.senderId,
+    recipientId: message.receiverId,
+    text: message.message,
+    read: message.isRead,
+    time: message.createdAt.toLocaleTimeString("pt-BR", {
+      hour: "2-digit",
+      minute: "2-digit"
+    }),
+    createdAt: message.createdAt
   };
 }
 
@@ -61,9 +65,13 @@ export class DashboardController {
     }
 
     const userOrders = dashboardOrders.filter((item) => item.userId === authenticatedUserId);
-    const userMessages = dashboardMessages
-      .filter((item) => item.userId === authenticatedUserId)
-      .map(sanitizeDashboardMessage);
+    const userMessages = await Message.findAll({
+      where: {
+        [Op.or]: [{ senderId: authenticatedUserId }, { receiverId: authenticatedUserId }]
+      },
+      order: [["createdAt", "ASC"]],
+      limit: 100
+    });
 
     return res.json({
       user: {
@@ -72,7 +80,7 @@ export class DashboardController {
         email: user.email
       },
       orders: userOrders,
-      messages: userMessages,
+      messages: userMessages.map((message) => sanitizeDashboardMessage(authenticatedUserId, message)),
       paymentMethods: [],
       paymentHistory: [],
       activeChatProfessional: null
@@ -80,8 +88,9 @@ export class DashboardController {
   }
 
   static async createMessage(req: Request, res: Response) {
-    const { professionalId, text } = req.body as {
+    const { professionalId, recipientId, text } = req.body as {
       professionalId?: string;
+      recipientId?: string | number;
       text?: string;
     };
 
@@ -90,21 +99,48 @@ export class DashboardController {
       return res.status(401).json({ message: "Token de autenticacao invalido ou ausente" });
     }
 
-    if (!professionalId || !text || !text.trim()) {
-      return res.status(400).json({ message: "professionalId e text sao obrigatorios" });
+    const parsedRecipientId = parsePositiveInteger(recipientId ?? professionalId);
+    if (!parsedRecipientId || !text || !text.trim()) {
+      return res.status(400).json({ message: "recipientId/professionalId e text sao obrigatorios" });
     }
 
-    const savedMessage: DashboardMessage = {
-      id: `msg-${Date.now()}`,
-      userId: authenticatedUserId,
-      sender: "user",
-      text: text.trim(),
-      time: nowAsPtBrTime()
-    };
+    if (parsedRecipientId === authenticatedUserId) {
+      return res.status(400).json({ message: "Nao e permitido enviar mensagem para voce mesmo" });
+    }
 
-    dashboardMessages.push(savedMessage);
+    const [sender, recipient] = await Promise.all([
+      User.findByPk(authenticatedUserId, { attributes: ["id", "name"] }),
+      User.findByPk(parsedRecipientId, { attributes: ["id", "name"] })
+    ]);
 
-    return res.status(201).json(sanitizeDashboardMessage(savedMessage));
+    if (!sender) {
+      return res.status(401).json({ message: "Usuario da sessao nao encontrado" });
+    }
+
+    if (!recipient) {
+      return res.status(404).json({ message: "Destinatario nao encontrado" });
+    }
+
+    const savedMessage = await Message.create({
+      conversationId: (await findOrCreateConversation(authenticatedUserId, parsedRecipientId)).id,
+      senderId: authenticatedUserId,
+      receiverId: parsedRecipientId,
+      message: text.trim()
+    });
+
+    await createNotification({
+      userId: parsedRecipientId,
+      type: "message",
+      title: "Nova mensagem",
+      message: `${sender.name} enviou uma mensagem`,
+      metadata: {
+        senderId: authenticatedUserId,
+        messageId: savedMessage.id,
+        conversationId: savedMessage.conversationId
+      }
+    });
+
+    return res.status(201).json(sanitizeDashboardMessage(authenticatedUserId, savedMessage));
   }
 
   static async rateOrder(req: Request, res: Response) {

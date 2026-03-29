@@ -8,6 +8,8 @@ import dashboardRouter from "./routes/dashboard.routes";
 import categoryRouter from "./routes/categories.router";
 import professionalsRouter from "./routes/professionals.routes";
 import adminRouter from "./routes/admin.routes";
+import messagesRouter from "./routes/messages.routes";
+import notificationsRouter from "./routes/notifications.routes";
 import { initDatabase } from "./config/database";
 
 
@@ -42,6 +44,8 @@ app.use("/api/dashboard", dashboardRouter);
 app.use("/api/categories", categoryRouter);
 app.use("/api/professionals", professionalsRouter);
 app.use("/api/admin", adminRouter);
+app.use("/api/messages", messagesRouter);
+app.use("/api/notifications", notificationsRouter);
 
 
 const PORT = Number(process.env.PORT) || 3000;

@@ -139,6 +139,5 @@ export function initProfessionalModel(sequelize: Sequelize) {
   return Professional;
 }
 
-// Transitional aliases to avoid breaking imports during refactor.
 export { Professional as ProfessionalProfile };
 export const initProfessionalProfileModel = initProfessionalModel;

@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { Op, Transaction } from "sequelize";
 import { Category, Professional, User, UserCategory } from "../models";
+import { createNotification } from "../services/notificationService";
 import { isValidCep, normalizeCep } from "../utils/cep";
 import { isValidCpf, normalizeCpf } from "../utils/cpf";
 import { getEmailValidationError, normalizeEmail } from "../utils/email";
@@ -487,14 +488,13 @@ export class ProfessionalsController {
             uf: normalizedUf,
             estado: normalizeOptionalText(estado),
             password: hashPassword(password),
-            role: "professional"
+            role: "user"
           },
           { transaction }
         );
       } else {
         await user.update(
           {
-            role: "professional",
             ...(name ? { name: name.trim() } : {}),
             ...(email ? { email: normalizedEmail } : {}),
             ...(!user.cpf ? { cpf: normalizedCpf } : {}),
@@ -542,8 +542,27 @@ export class ProfessionalsController {
       return res.status(500).json({ message: "Falha ao carregar profissional criado" });
     }
 
+    const adminUsers = await User.findAll({
+      where: { role: "admin" },
+      attributes: ["id"]
+    });
+
+    await Promise.all(
+      adminUsers.map((adminUser) =>
+        createNotification({
+          userId: adminUser.id,
+          type: "professional_pending",
+          title: "Novo cadastro profissional pendente",
+          message: `${savedUser.name} solicitou aprovacao de cadastro profissional.`,
+          metadata: {
+            applicantUserId: savedUser.id
+          }
+        })
+      )
+    );
+
     return res.status(201).json({
-      message: "Cadastro de profissional enviado com sucesso",
+      message: "Cadastro de profissional enviado para aprovacao",
       professional: sanitizeProfessional(savedUser)
     });
   }
@@ -629,7 +648,6 @@ export class ProfessionalsController {
     await User.sequelize!.transaction(async (transaction: Transaction) => {
       await user.update(
         {
-          role: "professional",
           ...(!user.password && password ? { password: hashPassword(password) } : {})
         },
         { transaction }
@@ -662,8 +680,27 @@ export class ProfessionalsController {
       return res.status(500).json({ message: "Falha ao carregar profissional criado" });
     }
 
+    const adminUsers = await User.findAll({
+      where: { role: "admin" },
+      attributes: ["id"]
+    });
+
+    await Promise.all(
+      adminUsers.map((adminUser) =>
+        createNotification({
+          userId: adminUser.id,
+          type: "professional_pending",
+          title: "Novo cadastro profissional pendente",
+          message: `${savedUser.name} solicitou aprovacao de cadastro profissional.`,
+          metadata: {
+            applicantUserId: savedUser.id
+          }
+        })
+      )
+    );
+
     return res.status(201).json({
-      message: "Usuario promovido para profissional com sucesso",
+      message: "Solicitacao enviada para aprovacao do admin",
       professional: sanitizeProfessional(savedUser)
     });
   }
@@ -680,6 +717,11 @@ export class ProfessionalsController {
     });
 
     if (!professional || !professional.get("professional")) {
+      return res.status(404).json({ message: "Profissional nao encontrado" });
+    }
+
+    const professionalProfile = professional.get("professional") as Professional | undefined;
+    if (!professionalProfile || professionalProfile.approvalStatus !== "approved" || professional.role !== "professional") {
       return res.status(404).json({ message: "Profissional nao encontrado" });
     }
 
