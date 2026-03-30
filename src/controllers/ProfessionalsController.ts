@@ -1,6 +1,13 @@
 import type { Request, Response } from "express";
 import { Op, Transaction } from "sequelize";
-import { Category, Professional, User, UserCategory } from "../models";
+import {
+  Category,
+  Professional,
+  ProfessionalReview,
+  User,
+  UserCategory,
+  UserProfile
+} from "../models";
 import { createNotification } from "../services/notificationService";
 import { isValidCep, normalizeCep } from "../utils/cep";
 import { isValidCpf, normalizeCpf } from "../utils/cpf";
@@ -28,6 +35,7 @@ type RegisterProfessionalBody = {
   uf?: string;
   estado?: string;
   online?: boolean | string;
+  photoUrl?: string;
   categoryIds?: unknown;
   categoryId?: unknown;
   "categoryIds[]"?: unknown;
@@ -45,9 +53,37 @@ type UpgradeProfessionalBody = {
   cep?: string;
   city?: string;
   online?: boolean | string;
+  photoUrl?: string;
   categoryIds?: unknown;
   categoryId?: unknown;
   "categoryIds[]"?: unknown;
+};
+
+type UpdateProfessionalProfileBody = {
+  description?: string;
+  experience?: string;
+  price?: string | number;
+  priceUnit?: string;
+  area?: string | number;
+  cep?: string;
+  city?: string;
+  online?: boolean | string;
+  photoUrl?: string;
+};
+
+type SanitizedReview = {
+  id: string;
+  user: string;
+  userPhoto: string;
+  rating: number;
+  date: string;
+  text: string;
+};
+
+type ReviewSnapshot = {
+  rating: number;
+  reviews: number;
+  reviewList: SanitizedReview[];
 };
 
 function parseCategoryFilter(value: unknown) {
@@ -155,6 +191,15 @@ function normalizeOptionalText(value: string | undefined) {
   return trimmed ? trimmed : null;
 }
 
+function normalizePhotoUrl(value: unknown) {
+  if (typeof value !== "string") return "";
+  return value.trim();
+}
+
+function formatReviewDate(value: Date) {
+  return value.toLocaleDateString("pt-BR");
+}
+
 function categoriesInclude() {
   return [
     {
@@ -179,38 +224,125 @@ function categoriesInclude() {
         "approvalStatus",
         "photoUrl"
       ]
+    },
+    {
+      association: "profile",
+      attributes: ["photoUrl"]
     }
   ];
 }
 
-function sanitizeProfessional(user: User) {
+function sanitizeProfessional(user: User, reviewSnapshot?: ReviewSnapshot) {
   const categories = (user.get("categories") as Category[] | undefined) ?? [];
   const professional = user.get("professional") as Professional | undefined;
+  const profile = user.get("profile") as UserProfile | undefined;
 
   const categoryLabels = categories.map((category) => category.label);
   const categoryIds = categories.map((category) => String(category.id));
+  const photo =
+    normalizePhotoUrl(professional?.photoUrl) ||
+    normalizePhotoUrl(profile?.photoUrl);
+  const rating = reviewSnapshot?.rating ?? 0;
+  const reviews = reviewSnapshot?.reviews ?? 0;
 
   return {
     id: String(user.id),
     name: user.name,
-    photo: professional?.photoUrl ?? "",
+    photo,
     online: Boolean(professional?.online),
     verified: Boolean(professional?.verified),
     categoryLabel: categoryLabels.join(" / "),
     categoryIds,
-    rating: 0,
-    reviews: 0,
+    rating,
+    reviews,
     city: professional?.city ?? "",
     distance: 0,
-    completedJobs: 0,
+    completedJobs: reviews,
     area: professional?.areaKm ?? 10,
     description: professional?.description ?? "",
     tags: categoryLabels,
     price: Number(professional?.price ?? 0),
     priceUnit: professional?.priceUnit ?? "servico",
     phone: user.phone ?? "",
-    reviewList: []
+    reviewList: reviewSnapshot?.reviewList ?? []
   };
+}
+
+async function buildReviewSnapshots(professionalUserIds: number[]) {
+  const snapshotMap = new Map<number, ReviewSnapshot>();
+  if (professionalUserIds.length === 0) return snapshotMap;
+
+  const reviews = await ProfessionalReview.findAll({
+    where: {
+      professionalUserId: {
+        [Op.in]: professionalUserIds
+      }
+    },
+    include: [
+      {
+        association: "reviewer",
+        attributes: ["id", "name"],
+        include: [
+          {
+            association: "profile",
+            attributes: ["photoUrl"]
+          }
+        ]
+      }
+    ],
+    order: [["createdAt", "DESC"]]
+  });
+
+  const totals = new Map<number, { sum: number; count: number }>();
+
+  for (const review of reviews) {
+    const currentTotals = totals.get(review.professionalUserId) ?? {
+      sum: 0,
+      count: 0
+    };
+
+    currentTotals.sum += review.rating;
+    currentTotals.count += 1;
+    totals.set(review.professionalUserId, currentTotals);
+
+    const currentSnapshot = snapshotMap.get(review.professionalUserId) ?? {
+      rating: 0,
+      reviews: 0,
+      reviewList: []
+    };
+
+    if (currentSnapshot.reviewList.length < 15) {
+      const reviewer = review.get("reviewer") as User | undefined;
+      const reviewerProfile = reviewer?.get("profile") as UserProfile | undefined;
+
+      currentSnapshot.reviewList.push({
+        id: String(review.id),
+        user: reviewer?.name ?? "Usuario",
+        userPhoto: normalizePhotoUrl(reviewerProfile?.photoUrl),
+        rating: review.rating,
+        date: formatReviewDate(review.createdAt),
+        text: review.comment ?? ""
+      });
+    }
+
+    snapshotMap.set(review.professionalUserId, currentSnapshot);
+  }
+
+  totals.forEach((item, professionalUserId) => {
+    const currentSnapshot = snapshotMap.get(professionalUserId) ?? {
+      rating: 0,
+      reviews: 0,
+      reviewList: []
+    };
+
+    const averageRating = item.count > 0 ? item.sum / item.count : 0;
+    currentSnapshot.rating = Number(averageRating.toFixed(1));
+    currentSnapshot.reviews = item.count;
+
+    snapshotMap.set(professionalUserId, currentSnapshot);
+  });
+
+  return snapshotMap;
 }
 
 async function categoriesAreValid(categoryIds: number[]) {
@@ -238,6 +370,7 @@ async function saveProfessionalData(
     cep?: string;
     city?: string;
     online?: boolean | string;
+    photoUrl?: string;
   },
   categoryIds: number[],
   transaction: Transaction
@@ -259,7 +392,7 @@ async function saveProfessionalData(
       online: parseOnlineFlag(professionalBody.online),
       verified: false,
       approvalStatus: "pending",
-      photoUrl: null
+      photoUrl: normalizePhotoUrl(professionalBody.photoUrl) || null
     },
     { transaction }
   );
@@ -285,9 +418,14 @@ export class ProfessionalsController {
       include: categoriesInclude()
     });
 
+    const professionalUserIds = users
+      .filter((user) => Boolean(user.get("professional")))
+      .map((user) => user.id);
+    const reviewSnapshots = await buildReviewSnapshots(professionalUserIds);
+
     let professionals = users
       .filter((user) => Boolean(user.get("professional")))
-      .map(sanitizeProfessional);
+      .map((user) => sanitizeProfessional(user, reviewSnapshots.get(user.id)));
 
     if (categoryFilter) {
       professionals = professionals.filter((professional) =>
@@ -335,6 +473,7 @@ export class ProfessionalsController {
       uf,
       estado,
       online,
+      photoUrl,
       categoryIds,
       categoryId
     } = req.body as RegisterProfessionalBody;
@@ -524,7 +663,8 @@ export class ProfessionalsController {
           area,
           cep: normalizedCep,
           city: city.trim(),
-          online
+          online,
+          photoUrl
         },
         parsedCategoryIds,
         transaction
@@ -580,6 +720,7 @@ export class ProfessionalsController {
       cep,
       city,
       online,
+      photoUrl,
       categoryIds,
       categoryId
     } = req.body as UpgradeProfessionalBody;
@@ -664,7 +805,8 @@ export class ProfessionalsController {
           area,
           cep,
           city,
-          online
+          online,
+          photoUrl
         },
         parsedCategoryIds,
         transaction
@@ -705,6 +847,97 @@ export class ProfessionalsController {
     });
   }
 
+  static async me(req: Request, res: Response) {
+    const authenticatedUserId = req.user?.id ?? null;
+    if (!authenticatedUserId) {
+      return res.status(401).json({ message: "Token de autenticacao invalido ou ausente" });
+    }
+
+    const professionalUser = await User.findByPk(authenticatedUserId, {
+      attributes: ["id", "name", "email", "phone", "role", "createdAt", "updatedAt"],
+      include: categoriesInclude()
+    });
+
+    if (!professionalUser || !professionalUser.get("professional")) {
+      return res.status(404).json({ message: "Perfil profissional nao encontrado" });
+    }
+
+    const reviewSnapshots = await buildReviewSnapshots([professionalUser.id]);
+    return res.json(sanitizeProfessional(professionalUser, reviewSnapshots.get(professionalUser.id)));
+  }
+
+  static async updateMyProfile(req: Request<unknown, unknown, UpdateProfessionalProfileBody>, res: Response) {
+    const authenticatedUserId = req.user?.id ?? null;
+    if (!authenticatedUserId) {
+      return res.status(401).json({ message: "Token de autenticacao invalido ou ausente" });
+    }
+
+    const professional = await Professional.findOne({
+      where: { userId: authenticatedUserId }
+    });
+    if (!professional) {
+      return res.status(404).json({ message: "Perfil profissional nao encontrado" });
+    }
+
+    const {
+      description,
+      experience,
+      price,
+      priceUnit,
+      area,
+      cep,
+      city,
+      online,
+      photoUrl
+    } = req.body;
+
+    if (typeof cep === "string" && cep.trim() && !isValidCep(cep)) {
+      return res.status(400).json({ message: "CEP invalido" });
+    }
+
+    const parsedPrice = parseOptionalNumber(price);
+    if (typeof price !== "undefined" && price !== null && price !== "" && parsedPrice === null) {
+      return res.status(400).json({ message: "price invalido" });
+    }
+
+    const parsedArea = parseOptionalNumber(area);
+    if (typeof area !== "undefined" && area !== null && area !== "" && parsedArea === null) {
+      return res.status(400).json({ message: "area invalida" });
+    }
+
+    await professional.update({
+      ...(typeof description !== "undefined" ? { description: normalizeOptionalText(description) } : {}),
+      ...(typeof experience !== "undefined" ? { experience: normalizeOptionalText(experience) } : {}),
+      ...(typeof price !== "undefined" ? { price: parsedPrice } : {}),
+      ...(typeof priceUnit !== "undefined" ? { priceUnit: normalizeOptionalText(priceUnit) ?? "servico" } : {}),
+      ...(typeof area !== "undefined"
+        ? { areaKm: parsedArea && parsedArea > 0 ? Math.round(parsedArea) : professional.areaKm }
+        : {}),
+      ...(typeof cep !== "undefined"
+        ? { cep: typeof cep === "string" && cep.trim() ? normalizeCep(cep) : null }
+        : {}),
+      ...(typeof city !== "undefined" ? { city: normalizeOptionalText(city) } : {}),
+      ...(typeof online !== "undefined" ? { online: parseOnlineFlag(online) } : {}),
+      ...(typeof photoUrl !== "undefined" ? { photoUrl: normalizePhotoUrl(photoUrl) || null } : {})
+    });
+
+    const professionalUser = await User.findByPk(authenticatedUserId, {
+      attributes: ["id", "name", "email", "phone", "role", "createdAt", "updatedAt"],
+      include: categoriesInclude()
+    });
+
+    if (!professionalUser) {
+      return res.status(404).json({ message: "Usuario nao encontrado" });
+    }
+
+    const reviewSnapshots = await buildReviewSnapshots([professionalUser.id]);
+
+    return res.json({
+      message: "Perfil profissional atualizado com sucesso",
+      professional: sanitizeProfessional(professionalUser, reviewSnapshots.get(professionalUser.id))
+    });
+  }
+
   static async show(req: Request, res: Response) {
     const professionalId = parseProfessionalId(req.params.id);
     if (!professionalId) {
@@ -725,6 +958,7 @@ export class ProfessionalsController {
       return res.status(404).json({ message: "Profissional nao encontrado" });
     }
 
-    return res.json(sanitizeProfessional(professional));
+    const reviewSnapshots = await buildReviewSnapshots([professional.id]);
+    return res.json(sanitizeProfessional(professional, reviewSnapshots.get(professional.id)));
   }
 }

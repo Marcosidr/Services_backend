@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { Category, User } from "../models";
+import { Category, User, UserProfile } from "../models";
 import { isValidCep, normalizeCep } from "../utils/cep";
 import { isValidCpf, normalizeCpf } from "../utils/cpf";
 import { getEmailValidationError, normalizeEmail } from "../utils/email";
@@ -42,16 +42,23 @@ function categoriesInclude() {
       association: "categories",
       attributes: ["id", "slug", "label", "icon", "is_active"],
       through: { attributes: [] }
+    },
+    {
+      association: "profile",
+      attributes: ["photoUrl", "bio"]
     }
   ];
 }
 
 function sanitizeUser(user: User) {
   const userCategories = (user.get("categories") as Category[] | undefined) ?? [];
+  const profile = user.get("profile") as UserProfile | undefined;
 
   return {
     id: user.id,
     name: user.name,
+    photo: typeof profile?.photoUrl === "string" ? profile.photoUrl : "",
+    bio: typeof profile?.bio === "string" ? profile.bio : null,
     email: user.email,
     cpf: user.cpf,
     phone: user.phone,

@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { Op } from "sequelize";
-import { Message, User } from "../models";
+import { Message, Professional, User, UserProfile } from "../models";
 import { findOrCreateConversation } from "../services/conversationService";
 import { createNotification } from "../services/notificationService";
 
@@ -50,6 +50,17 @@ function mapMessageForResponse(currentUserId: number, message: Message) {
   };
 }
 
+function normalizePhotoUrl(value: unknown) {
+  if (typeof value !== "string") return "";
+  return value.trim();
+}
+
+function getUserPhoto(user: User) {
+  const professional = user.get("professional") as Professional | undefined;
+  const profile = user.get("profile") as UserProfile | undefined;
+  return normalizePhotoUrl(professional?.photoUrl) || normalizePhotoUrl(profile?.photoUrl);
+}
+
 export class MessagesController {
   static async conversations(
     req: Request<unknown, unknown, unknown, ConversationQuery>,
@@ -70,11 +81,31 @@ export class MessagesController {
       include: [
         {
           association: "sender",
-          attributes: ["id", "name"]
+          attributes: ["id", "name"],
+          include: [
+            {
+              association: "professional",
+              attributes: ["photoUrl"]
+            },
+            {
+              association: "profile",
+              attributes: ["photoUrl"]
+            }
+          ]
         },
         {
           association: "recipient",
-          attributes: ["id", "name"]
+          attributes: ["id", "name"],
+          include: [
+            {
+              association: "professional",
+              attributes: ["photoUrl"]
+            },
+            {
+              association: "profile",
+              attributes: ["photoUrl"]
+            }
+          ]
         }
       ],
       order: [["createdAt", "DESC"]],
@@ -87,6 +118,7 @@ export class MessagesController {
         conversationId: string;
         otherUserId: number;
         otherUserName: string;
+        otherUserPhoto: string;
         lastMessage: {
           id: string;
           senderId: number;
@@ -113,6 +145,7 @@ export class MessagesController {
           conversationId: String(message.conversationId),
           otherUserId: otherUser.id,
           otherUserName: otherUser.name,
+          otherUserPhoto: getUserPhoto(otherUser),
           lastMessage: {
             id: String(message.id),
             senderId: message.senderId,

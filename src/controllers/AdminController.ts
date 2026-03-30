@@ -1,5 +1,13 @@
 import type { Request, Response } from "express";
-import { Category, Notification, Professional, User } from "../models";
+import { Op } from "sequelize";
+import {
+  Category,
+  Notification,
+  Professional,
+  ProfessionalReview,
+  User,
+  UserProfile
+} from "../models";
 import { createNotification } from "../services/notificationService";
 
 type AdminUserStatus = "ativo" | "bloqueado";
@@ -46,6 +54,17 @@ function getUserProfessional(user: User) {
   return (user.get("professional") as Professional | undefined) ?? null;
 }
 
+function normalizePhotoUrl(value: unknown) {
+  if (typeof value !== "string") return "";
+  return value.trim();
+}
+
+function getUserPhoto(user: User) {
+  const professional = getUserProfessional(user);
+  const profile = user.get("profile") as UserProfile | undefined;
+  return normalizePhotoUrl(professional?.photoUrl) || normalizePhotoUrl(profile?.photoUrl);
+}
+
 function buildCategoryDistribution(approvedUsers: User[]) {
   const categoryCount = new Map<string, number>();
 
@@ -74,7 +93,7 @@ export class AdminController {
 
     const users = await User.findAll({
       order: [["createdAt", "DESC"]],
-      attributes: ["id", "name", "email", "role", "createdAt", "updatedAt"],
+      attributes: ["id", "name", "email", "cpf", "role", "createdAt", "updatedAt"],
       include: [
         {
           association: "categories",
@@ -83,7 +102,11 @@ export class AdminController {
         },
         {
           association: "professional",
-          attributes: ["id", "online", "verified", "approvalStatus", "createdAt", "updatedAt"]
+          attributes: ["id", "online", "verified", "approvalStatus", "createdAt", "updatedAt", "photoUrl"]
+        },
+        {
+          association: "profile",
+          attributes: ["photoUrl"]
         }
       ]
     });
@@ -108,6 +131,28 @@ export class AdminController {
       .filter((item) => item.professional?.approvalStatus === "approved")
       .map((item) => item.user);
 
+    const reviewRows = approvedUsers.length
+      ? await ProfessionalReview.findAll({
+          where: {
+            professionalUserId: {
+              [Op.in]: approvedUsers.map((user) => user.id)
+            }
+          },
+          attributes: ["professionalUserId", "rating"]
+        })
+      : [];
+
+    const reviewTotalsByProfessional = new Map<number, { sum: number; count: number }>();
+    for (const review of reviewRows) {
+      const currentTotals = reviewTotalsByProfessional.get(review.professionalUserId) ?? {
+        sum: 0,
+        count: 0
+      };
+      currentTotals.sum += review.rating;
+      currentTotals.count += 1;
+      reviewTotalsByProfessional.set(review.professionalUserId, currentTotals);
+    }
+
     const pendingProfessionals = professionalsWithStatus
       .filter((item) => item.professional?.approvalStatus === "pending")
       .map((item) => {
@@ -128,14 +173,18 @@ export class AdminController {
       .map((item) => {
         const professional = item.professional!;
         const categories = getUserCategories(item.user);
+        const reviewTotals = reviewTotalsByProfessional.get(item.user.id);
+        const reviewCount = reviewTotals?.count ?? 0;
+        const averageRating =
+          reviewTotals && reviewTotals.count > 0 ? reviewTotals.sum / reviewTotals.count : 0;
 
         return {
           id: String(professional.id),
           name: item.user.name,
-          photo: "",
+          photo: getUserPhoto(item.user),
           categoryLabel: categories.map((category) => category.label).join(" / ") || "Sem categoria",
-          rating: 0,
-          completedJobs: 0,
+          rating: Number(averageRating.toFixed(1)),
+          completedJobs: reviewCount,
           status: (professional.online ? "online" : "offline") as ProfessionalStatus,
           verified: Boolean(professional.verified)
         };

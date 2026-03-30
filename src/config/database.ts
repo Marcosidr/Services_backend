@@ -53,6 +53,16 @@ export async function initDatabase() {
   const sequelizeInstance = getSequelize();
 
   await sequelizeInstance.authenticate();
+  await sequelizeInstance.query(`
+DO $$
+BEGIN
+  IF to_regclass('"professional_reviews_reviewer_user_id_professional_user_id_orde"') IS NOT NULL
+     AND to_regclass('"pr_reviews_uq_reviewer_prof_order"') IS NULL THEN
+    ALTER INDEX "professional_reviews_reviewer_user_id_professional_user_id_orde"
+      RENAME TO "pr_reviews_uq_reviewer_prof_order";
+  END IF;
+END $$;
+`);
   initModels(sequelizeInstance);
 
   // Evita ALTER automatico por padrao para nao quebrar tipos ENUM ja existentes.

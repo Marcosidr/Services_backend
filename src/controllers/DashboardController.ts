@@ -1,6 +1,13 @@
 import type { Request, Response } from "express";
 import { Op } from "sequelize";
-import { Message, User } from "../models";
+import {
+  Category,
+  Message,
+  Professional,
+  ProfessionalReview,
+  User,
+  UserProfile
+} from "../models";
 import { findOrCreateConversation } from "../services/conversationService";
 import { createNotification } from "../services/notificationService";
 
@@ -16,6 +23,12 @@ type DashboardOrder = {
   price: number;
   status: DashboardOrderStatus;
   rating?: number;
+};
+
+type RateOrderBody = {
+  rating?: number;
+  comment?: string;
+  professionalId?: number | string;
 };
 
 const dashboardOrders: DashboardOrder[] = [];
@@ -50,6 +63,23 @@ function sanitizeDashboardMessage(authenticatedUserId: number, message: Message)
   };
 }
 
+function normalizePhotoUrl(value: unknown) {
+  if (typeof value !== "string") return "";
+  return value.trim();
+}
+
+function getUserPhoto(user: User) {
+  const professional = user.get("professional") as Professional | undefined;
+  const profile = user.get("profile") as UserProfile | undefined;
+
+  return normalizePhotoUrl(professional?.photoUrl) || normalizePhotoUrl(profile?.photoUrl);
+}
+
+function getUserBio(user: User) {
+  const profile = user.get("profile") as UserProfile | undefined;
+  return profile?.bio ?? null;
+}
+
 export class DashboardController {
   static async index(req: Request, res: Response) {
     const authenticatedUserId = getAuthenticatedUserId(req);
@@ -58,13 +88,129 @@ export class DashboardController {
     }
 
     const user = await User.findByPk(authenticatedUserId, {
-      attributes: ["id", "name", "email"]
+      attributes: [
+        "id",
+        "name",
+        "email",
+        "phone",
+        "cep",
+        "endereco",
+        "numero",
+        "complemento",
+        "bairro",
+        "cidade",
+        "uf",
+        "estado",
+        "role"
+      ],
+      include: [
+        {
+          association: "professional",
+          attributes: ["photoUrl"]
+        },
+        {
+          association: "profile",
+          attributes: ["photoUrl", "bio"]
+        }
+      ]
     });
     if (!user) {
       return res.status(401).json({ message: "Usuario da sessao nao encontrado" });
     }
 
-    const userOrders = dashboardOrders.filter((item) => item.userId === authenticatedUserId);
+    const rawUserOrders = dashboardOrders.filter((item) => item.userId === authenticatedUserId);
+
+    const professionalIds = Array.from(
+      new Set(
+        rawUserOrders
+          .map((item) => parsePositiveInteger(item.professionalId))
+          .filter((professionalId): professionalId is number => Boolean(professionalId))
+      )
+    );
+
+    const professionals = professionalIds.length
+      ? await User.findAll({
+          where: {
+            id: {
+              [Op.in]: professionalIds
+            }
+          },
+          attributes: ["id", "name", "role"],
+          include: [
+            {
+              association: "professional",
+              attributes: ["photoUrl", "online"]
+            },
+            {
+              association: "profile",
+              attributes: ["photoUrl"]
+            },
+            {
+              association: "categories",
+              attributes: ["label"],
+              through: { attributes: [] }
+            }
+          ]
+        })
+      : [];
+
+    const professionalMap = new Map<
+      number,
+      {
+        id: string;
+        name: string;
+        photo: string;
+        categoryLabel: string;
+        online: boolean;
+      }
+    >();
+
+    for (const professionalUser of professionals) {
+      const categories = (professionalUser.get("categories") as Category[] | undefined) ?? [];
+      const professional = professionalUser.get("professional") as Professional | undefined;
+
+      professionalMap.set(professionalUser.id, {
+        id: String(professionalUser.id),
+        name: professionalUser.name,
+        photo: getUserPhoto(professionalUser),
+        categoryLabel: categories.map((category) => category.label).join(" / "),
+        online: Boolean(professional?.online)
+      });
+    }
+
+    const userReviews = await ProfessionalReview.findAll({
+      where: {
+        reviewerUserId: authenticatedUserId
+      },
+      attributes: ["orderId", "professionalUserId", "rating"]
+    });
+
+    const ratingByOrderId = new Map<string, number>();
+    const ratingByProfessionalId = new Map<number, number>();
+
+    for (const review of userReviews) {
+      if (review.orderId) {
+        ratingByOrderId.set(review.orderId, review.rating);
+      }
+
+      ratingByProfessionalId.set(review.professionalUserId, review.rating);
+    }
+
+    const userOrders = rawUserOrders.map((item) => {
+      const parsedProfessionalId = parsePositiveInteger(item.professionalId);
+      const professional = parsedProfessionalId ? professionalMap.get(parsedProfessionalId) : null;
+
+      return {
+        ...item,
+        professionalName: professional?.name ?? item.professionalName,
+        rating:
+          item.rating ??
+          ratingByOrderId.get(item.id) ??
+          (parsedProfessionalId ? ratingByProfessionalId.get(parsedProfessionalId) : undefined),
+        professional: professional ?? undefined
+      };
+    });
+
     const userMessages = await Message.findAll({
       where: {
         [Op.or]: [{ senderId: authenticatedUserId }, { receiverId: authenticatedUserId }]
@@ -77,7 +223,19 @@ export class DashboardController {
       user: {
         id: user.id,
         name: user.name,
-        email: user.email
+        email: user.email,
+        phone: user.phone,
+        cep: user.cep,
+        endereco: user.endereco,
+        numero: user.numero,
+        complemento: user.complemento,
+        bairro: user.bairro,
+        cidade: user.cidade,
+        uf: user.uf,
+        estado: user.estado,
+        photo: getUserPhoto(user),
+        bio: getUserBio(user),
+        role: user.role
       },
       orders: userOrders,
       messages: userMessages.map((message) => sanitizeDashboardMessage(authenticatedUserId, message)),
@@ -144,8 +302,8 @@ export class DashboardController {
   }
 
   static async rateOrder(req: Request, res: Response) {
-    const { orderId } = req.params;
-    const { rating } = req.body as { rating?: number };
+    const orderId = typeof req.params.orderId === "string" ? req.params.orderId : "";
+    const { rating, comment, professionalId } = req.body as RateOrderBody;
 
     const authenticatedUserId = getAuthenticatedUserId(req);
     if (!authenticatedUserId) {
@@ -160,11 +318,65 @@ export class DashboardController {
     const order = dashboardOrders.find(
       (item) => item.id === orderId && item.userId === authenticatedUserId
     );
-    if (!order) return res.status(404).json({ message: "Pedido nao encontrado" });
 
-    order.rating = rating;
+    const parsedProfessionalId = parsePositiveInteger(
+      professionalId ?? order?.professionalId
+    );
 
-    return res.status(201).json({ message: "Avaliacao registrada com sucesso" });
+    if (!parsedProfessionalId) {
+      return res.status(400).json({
+        message: "professionalId invalido"
+      });
+    }
+
+    const professionalUser = await User.findByPk(parsedProfessionalId, {
+      attributes: ["id", "role"]
+    });
+
+    if (!professionalUser || professionalUser.role !== "professional") {
+      return res.status(404).json({ message: "Profissional nao encontrado" });
+    }
+
+    const normalizedComment =
+      typeof comment === "string" && comment.trim() ? comment.trim() : null;
+    const normalizedOrderId = orderId.trim() || null;
+
+    const existingReview = await ProfessionalReview.findOne({
+      where: {
+        reviewerUserId: authenticatedUserId,
+        ...(orderId
+          ? {
+              orderId: normalizedOrderId,
+              professionalUserId: parsedProfessionalId
+            }
+          : { professionalUserId: parsedProfessionalId })
+      }
+    });
+
+    if (existingReview) {
+      await existingReview.update({
+        professionalUserId: parsedProfessionalId,
+        rating,
+        comment: normalizedComment,
+        orderId: normalizedOrderId
+      });
+    } else {
+      await ProfessionalReview.create({
+        reviewerUserId: authenticatedUserId,
+        professionalUserId: parsedProfessionalId,
+        rating,
+        comment: normalizedComment,
+        orderId: normalizedOrderId
+      });
+    }
+
+    if (order) {
+      order.rating = rating;
+    }
+
+    return res.status(201).json({
+      message: "Avaliacao registrada com sucesso"
+    });
   }
 
   static async cancelOrder(req: Request, res: Response) {

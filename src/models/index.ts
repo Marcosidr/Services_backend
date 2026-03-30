@@ -6,6 +6,8 @@ import { initProfessionalModel, Professional } from "./ProfessionalProfile";
 import { initNotificationModel, Notification } from "./Notification";
 import { Conversation, initConversationModel } from "./Conversation";
 import { initMessageModel, Message } from "./Message";
+import { initUserProfileModel, UserProfile } from "./UserProfile";
+import { initProfessionalReviewModel, ProfessionalReview } from "./ProfessionalReview";
 
 export function initModels(sequelize: Sequelize) {
   initUserModel(sequelize);
@@ -15,6 +17,8 @@ export function initModels(sequelize: Sequelize) {
   initNotificationModel(sequelize);
   initConversationModel(sequelize);
   initMessageModel(sequelize);
+  initUserProfileModel(sequelize);
+  initProfessionalReviewModel(sequelize);
 
   User.belongsToMany(Category, {
     through: UserCategory,
@@ -36,6 +40,16 @@ export function initModels(sequelize: Sequelize) {
   });
 
   Professional.belongsTo(User, {
+    foreignKey: "userId",
+    as: "user"
+  });
+
+  User.hasOne(UserProfile, {
+    foreignKey: "userId",
+    as: "profile"
+  });
+
+  UserProfile.belongsTo(User, {
     foreignKey: "userId",
     as: "user"
   });
@@ -99,6 +113,26 @@ export function initModels(sequelize: Sequelize) {
     foreignKey: "receiverId",
     as: "recipient"
   });
+
+  User.hasMany(ProfessionalReview, {
+    foreignKey: "professionalUserId",
+    as: "receivedReviews"
+  });
+
+  User.hasMany(ProfessionalReview, {
+    foreignKey: "reviewerUserId",
+    as: "sentReviews"
+  });
+
+  ProfessionalReview.belongsTo(User, {
+    foreignKey: "professionalUserId",
+    as: "professionalUser"
+  });
+
+  ProfessionalReview.belongsTo(User, {
+    foreignKey: "reviewerUserId",
+    as: "reviewer"
+  });
 }
 
 export { User };
@@ -108,3 +142,5 @@ export { Professional };
 export { Notification };
 export { Conversation };
 export { Message };
+export { UserProfile };
+export { ProfessionalReview };
