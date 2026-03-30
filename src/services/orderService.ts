@@ -1,3 +1,6 @@
+import { Op } from "sequelize";
+import { ServiceOrderRecord } from "../models";
+
 export type ServiceOrderStatus = "aguardando" | "em andamento" | "concluido" | "cancelado";
 
 export type ServiceOrder = {
@@ -25,8 +28,6 @@ type CreateServiceOrderInput = {
   price?: number;
 };
 
-const serviceOrders: ServiceOrder[] = [];
-
 function buildOrderId() {
   return `ord_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -37,47 +38,87 @@ function normalizeDescription(value: string | null | undefined) {
   return trimmed ? trimmed : null;
 }
 
-function matchesPair(order: ServiceOrder, userAId: number, userBId: number) {
-  return (
-    (order.requesterUserId === userAId && order.professionalUserId === userBId) ||
-    (order.requesterUserId === userBId && order.professionalUserId === userAId)
-  );
+function parseOrderPrice(value: string | number) {
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+      ? Number(value)
+      : NaN;
+
+  return Number.isFinite(parsed) ? Number(parsed) : 0;
 }
 
-export function listAllOrders() {
-  return [...serviceOrders];
+function toServiceOrder(record: ServiceOrderRecord): ServiceOrder {
+  const price = parseOrderPrice(record.price);
+
+  return {
+    id: record.id,
+    requesterUserId: record.requesterUserId,
+    professionalUserId: record.professionalUserId,
+    requesterName: record.requesterName,
+    professionalName: record.professionalName,
+    category: record.category,
+    description: record.description,
+    date: record.orderDate.toISOString(),
+    price,
+    status: record.status,
+    ...(typeof record.rating === "number" ? { rating: record.rating } : {})
+  };
 }
 
-export function listOrdersForRequester(requesterUserId: number) {
-  return serviceOrders.filter((order) => order.requesterUserId === requesterUserId);
+export async function listAllOrders() {
+  const records = await ServiceOrderRecord.findAll({
+    order: [["orderDate", "DESC"]]
+  });
+  return records.map(toServiceOrder);
 }
 
-export function listOrdersForProfessional(professionalUserId: number) {
-  return serviceOrders.filter((order) => order.professionalUserId === professionalUserId);
+export async function listOrdersForRequester(requesterUserId: number) {
+  const records = await ServiceOrderRecord.findAll({
+    where: { requesterUserId },
+    order: [["orderDate", "DESC"]]
+  });
+  return records.map(toServiceOrder);
 }
 
-export function getOrderById(orderId: string) {
-  return serviceOrders.find((order) => order.id === orderId) ?? null;
+export async function listOrdersForProfessional(professionalUserId: number) {
+  const records = await ServiceOrderRecord.findAll({
+    where: { professionalUserId },
+    order: [["orderDate", "DESC"]]
+  });
+  return records.map(toServiceOrder);
 }
 
-export function getOrderForRequester(orderId: string, requesterUserId: number) {
-  return (
-    serviceOrders.find(
-      (order) => order.id === orderId && order.requesterUserId === requesterUserId
-    ) ?? null
-  );
+export async function getOrderById(orderId: string) {
+  const record = await ServiceOrderRecord.findByPk(orderId);
+  return record ? toServiceOrder(record) : null;
 }
 
-export function getOrderForProfessional(orderId: string, professionalUserId: number) {
-  return (
-    serviceOrders.find(
-      (order) => order.id === orderId && order.professionalUserId === professionalUserId
-    ) ?? null
-  );
+export async function getOrderForRequester(orderId: string, requesterUserId: number) {
+  const record = await ServiceOrderRecord.findOne({
+    where: {
+      id: orderId,
+      requesterUserId
+    }
+  });
+
+  return record ? toServiceOrder(record) : null;
 }
 
-export function createServiceOrder(input: CreateServiceOrderInput) {
-  const order: ServiceOrder = {
+export async function getOrderForProfessional(orderId: string, professionalUserId: number) {
+  const record = await ServiceOrderRecord.findOne({
+    where: {
+      id: orderId,
+      professionalUserId
+    }
+  });
+
+  return record ? toServiceOrder(record) : null;
+}
+
+export async function createServiceOrder(input: CreateServiceOrderInput) {
+  const record = await ServiceOrderRecord.create({
     id: buildOrderId(),
     requesterUserId: input.requesterUserId,
     professionalUserId: input.professionalUserId,
@@ -85,38 +126,85 @@ export function createServiceOrder(input: CreateServiceOrderInput) {
     professionalName: input.professionalName,
     category: input.category,
     description: normalizeDescription(input.description),
-    date: input.date ?? new Date().toISOString(),
+    orderDate: input.date ? new Date(input.date) : new Date(),
     price: Number.isFinite(input.price) ? Number(input.price) : 0,
     status: "aguardando"
+  });
+
+  return toServiceOrder(record);
+}
+
+export async function updateOrderStatus(order: ServiceOrder, nextStatus: ServiceOrderStatus) {
+  await ServiceOrderRecord.update(
+    {
+      status: nextStatus
+    },
+    {
+      where: {
+        id: order.id
+      }
+    }
+  );
+
+  return {
+    ...order,
+    status: nextStatus
   };
-
-  serviceOrders.unshift(order);
-  return order;
 }
 
-export function updateOrderStatus(order: ServiceOrder, nextStatus: ServiceOrderStatus) {
-  order.status = nextStatus;
-  return order;
-}
-
-export function setOrderRating(order: ServiceOrder, rating: number) {
-  order.rating = rating;
-  return order;
-}
-
-export function hasPendingOrInProgressOrder(requesterUserId: number, professionalUserId: number) {
-  return serviceOrders.some(
-    (order) =>
-      order.requesterUserId === requesterUserId &&
-      order.professionalUserId === professionalUserId &&
-      (order.status === "aguardando" || order.status === "em andamento")
+export async function setOrderRating(order: ServiceOrder, rating: number) {
+  await ServiceOrderRecord.update(
+    {
+      rating
+    },
+    {
+      where: {
+        id: order.id
+      }
+    }
   );
+
+  return {
+    ...order,
+    rating
+  };
 }
 
-export function canUsersChat(userAId: number, userBId: number) {
-  return serviceOrders.some(
-    (order) =>
-      matchesPair(order, userAId, userBId) &&
-      (order.status === "em andamento" || order.status === "concluido")
-  );
+export async function hasPendingOrInProgressOrder(
+  requesterUserId: number,
+  professionalUserId: number
+) {
+  const total = await ServiceOrderRecord.count({
+    where: {
+      requesterUserId,
+      professionalUserId,
+      status: {
+        [Op.in]: ["aguardando", "em andamento"]
+      }
+    }
+  });
+
+  return total > 0;
+}
+
+export async function canUsersChat(userAId: number, userBId: number) {
+  const total = await ServiceOrderRecord.count({
+    where: {
+      status: {
+        [Op.in]: ["em andamento", "concluido"]
+      },
+      [Op.or]: [
+        {
+          requesterUserId: userAId,
+          professionalUserId: userBId
+        },
+        {
+          requesterUserId: userBId,
+          professionalUserId: userAId
+        }
+      ]
+    }
+  });
+
+  return total > 0;
 }

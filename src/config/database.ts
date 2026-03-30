@@ -26,6 +26,22 @@ const defaultCategories = [
   { slug: "REPAROS_GERAIS", label: "Reparos Gerais", icon: "hammer", is_active: true }
 ] as const;
 
+function shouldUseDatabaseSsl(databaseUrl: string) {
+  try {
+    const host = new URL(databaseUrl).hostname.toLowerCase();
+    if (host === "localhost" || host === "127.0.0.1") {
+      return false;
+    }
+  } catch {
+    // Usa fallback padrao caso a URL nao seja parseavel.
+  }
+
+  const explicitSsl = process.env.DB_SSL;
+  if (explicitSsl === "true") return true;
+  if (explicitSsl === "false") return false;
+
+  return true;
+}
 
 export function getSequelize() {
   if (sequelize) return sequelize;
@@ -35,16 +51,26 @@ export function getSequelize() {
     throw new Error("DATABASE_URL nao definido no ambiente.");
   }
 
+  const useSsl = shouldUseDatabaseSsl(databaseUrl);
+
   sequelize = new Sequelize(databaseUrl, {
-  dialect: "postgres",
-  logging: false,
-  dialectOptions: {
-    ssl: {
-      require: true,
-      rejectUnauthorized: false,
-    },
-  },
-});
+    dialect: "postgres",
+    logging: false,
+    ...(useSsl
+      ? {
+          dialectOptions: {
+            ssl: {
+              require: true,
+              rejectUnauthorized: false
+            }
+          }
+        }
+      : {
+          dialectOptions: {
+            ssl: false
+          }
+        })
+  });
 
   return sequelize;
 }

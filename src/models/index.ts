@@ -8,6 +8,7 @@ import { Conversation, initConversationModel } from "./Conversation";
 import { initMessageModel, Message } from "./Message";
 import { initUserProfileModel, UserProfile } from "./UserProfile";
 import { initProfessionalReviewModel, ProfessionalReview } from "./ProfessionalReview";
+import { initServiceOrderModel, ServiceOrderRecord } from "./ServiceOrder";
 
 export function initModels(sequelize: Sequelize) {
   initUserModel(sequelize);
@@ -19,6 +20,7 @@ export function initModels(sequelize: Sequelize) {
   initMessageModel(sequelize);
   initUserProfileModel(sequelize);
   initProfessionalReviewModel(sequelize);
+  initServiceOrderModel(sequelize);
 
   User.belongsToMany(Category, {
     through: UserCategory,
@@ -133,6 +135,26 @@ export function initModels(sequelize: Sequelize) {
     foreignKey: "reviewerUserId",
     as: "reviewer"
   });
+
+  User.hasMany(ServiceOrderRecord, {
+    foreignKey: "requesterUserId",
+    as: "requestedOrders"
+  });
+
+  User.hasMany(ServiceOrderRecord, {
+    foreignKey: "professionalUserId",
+    as: "professionalOrders"
+  });
+
+  ServiceOrderRecord.belongsTo(User, {
+    foreignKey: "requesterUserId",
+    as: "requester"
+  });
+
+  ServiceOrderRecord.belongsTo(User, {
+    foreignKey: "professionalUserId",
+    as: "professionalUser"
+  });
 }
 
 export { User };
@@ -144,3 +166,4 @@ export { Conversation };
 export { Message };
 export { UserProfile };
 export { ProfessionalReview };
+export { ServiceOrderRecord };

@@ -257,7 +257,7 @@ export class MessagesController {
       (senderIsProfessional && recipient.role === "user") ||
       (recipientIsProfessional && sender.role === "user");
 
-    if (requiresAcceptedOrder && !canUsersChat(authenticatedUserId, parsedRecipientId)) {
+    if (requiresAcceptedOrder && !(await canUsersChat(authenticatedUserId, parsedRecipientId))) {
       return res.status(403).json({
         message: "Chat liberado somente apos o profissional aceitar o pedido"
       });

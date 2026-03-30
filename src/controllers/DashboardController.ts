@@ -141,8 +141,8 @@ export class DashboardController {
 
     const rawUserOrders =
       user.role === "professional"
-        ? listOrdersForProfessional(authenticatedUserId)
-        : listOrdersForRequester(authenticatedUserId);
+        ? await listOrdersForProfessional(authenticatedUserId)
+        : await listOrdersForRequester(authenticatedUserId);
 
     const relatedUserIds = Array.from(
       new Set(
@@ -317,7 +317,7 @@ export class DashboardController {
       return res.status(404).json({ message: "Profissional nao encontrado" });
     }
 
-    if (hasPendingOrInProgressOrder(authenticatedUserId, parsedProfessionalId)) {
+    if (await hasPendingOrInProgressOrder(authenticatedUserId, parsedProfessionalId)) {
       return res.status(409).json({
         message: "Voce ja possui um pedido aberto com este profissional"
       });
@@ -344,7 +344,7 @@ export class DashboardController {
       }
     }
 
-    const createdOrder = createServiceOrder({
+    const createdOrder = await createServiceOrder({
       requesterUserId: authenticatedUserId,
       professionalUserId: parsedProfessionalId,
       requesterName: requesterUser.name,
@@ -414,7 +414,7 @@ export class DashboardController {
       (senderIsProfessional && recipient.role === "user") ||
       (recipientIsProfessional && sender.role === "user");
 
-    if (requiresAcceptedOrder && !canUsersChat(authenticatedUserId, parsedRecipientId)) {
+    if (requiresAcceptedOrder && !(await canUsersChat(authenticatedUserId, parsedRecipientId))) {
       return res.status(403).json({
         message: "Chat liberado somente apos o profissional aceitar o pedido"
       });
@@ -456,7 +456,7 @@ export class DashboardController {
       return res.status(400).json({ message: "rating deve ser um numero entre 1 e 5" });
     }
 
-    const order = getOrderForRequester(orderId, authenticatedUserId);
+    const order = await getOrderForRequester(orderId, authenticatedUserId);
     if (!order) {
       return res.status(404).json({ message: "Pedido nao encontrado" });
     }
@@ -518,7 +518,7 @@ export class DashboardController {
       });
     }
 
-    setOrderRating(order, rating);
+    await setOrderRating(order, rating);
 
     return res.status(201).json({
       message: "Avaliacao registrada com sucesso"
@@ -534,14 +534,14 @@ export class DashboardController {
 
     if (!orderId) return res.status(400).json({ message: "orderId invalido" });
 
-    const order = getOrderForProfessional(orderId, authenticatedUserId);
+    const order = await getOrderForProfessional(orderId, authenticatedUserId);
     if (!order) return res.status(404).json({ message: "Pedido nao encontrado" });
 
     if (order.status !== "aguardando") {
       return res.status(400).json({ message: "Este pedido nao pode mais ser aceito" });
     }
 
-    updateOrderStatus(order, "em andamento");
+    await updateOrderStatus(order, "em andamento");
 
     await createNotification({
       userId: order.requesterUserId,
@@ -567,14 +567,14 @@ export class DashboardController {
 
     if (!orderId) return res.status(400).json({ message: "orderId invalido" });
 
-    const order = getOrderForProfessional(orderId, authenticatedUserId);
+    const order = await getOrderForProfessional(orderId, authenticatedUserId);
     if (!order) return res.status(404).json({ message: "Pedido nao encontrado" });
 
     if (order.status !== "aguardando") {
       return res.status(400).json({ message: "Este pedido nao pode mais ser recusado" });
     }
 
-    updateOrderStatus(order, "cancelado");
+    await updateOrderStatus(order, "cancelado");
 
     await createNotification({
       userId: order.requesterUserId,
@@ -600,14 +600,14 @@ export class DashboardController {
 
     if (!orderId) return res.status(400).json({ message: "orderId invalido" });
 
-    const order = getOrderForProfessional(orderId, authenticatedUserId);
+    const order = await getOrderForProfessional(orderId, authenticatedUserId);
     if (!order) return res.status(404).json({ message: "Pedido nao encontrado" });
 
     if (order.status !== "em andamento") {
       return res.status(400).json({ message: "Somente atendimento em andamento pode ser finalizado" });
     }
 
-    updateOrderStatus(order, "concluido");
+    await updateOrderStatus(order, "concluido");
 
     await createNotification({
       userId: order.requesterUserId,
@@ -634,14 +634,14 @@ export class DashboardController {
 
     if (!orderId) return res.status(400).json({ message: "orderId invalido" });
 
-    const order = getOrderForRequester(orderId, authenticatedUserId);
+    const order = await getOrderForRequester(orderId, authenticatedUserId);
     if (!order) return res.status(404).json({ message: "Pedido nao encontrado" });
 
     if (order.status === "concluido") {
       return res.status(400).json({ message: "Nao e possivel cancelar pedido concluido" });
     }
 
-    updateOrderStatus(order, "cancelado");
+    await updateOrderStatus(order, "cancelado");
 
     await createNotification({
       userId: order.professionalUserId,
