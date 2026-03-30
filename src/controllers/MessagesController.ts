@@ -1,8 +1,9 @@
 import type { Request, Response } from "express";
 import { Op } from "sequelize";
-import { Message, Professional, User, UserProfile } from "../models";
+import { Conversation, Message, Professional, User, UserProfile } from "../models";
 import { findOrCreateConversation } from "../services/conversationService";
 import { createNotification } from "../services/notificationService";
+import { canUsersChat } from "../services/orderService";
 
 type MessageBody = {
   recipientId?: number | string;
@@ -238,8 +239,8 @@ export class MessagesController {
     }
 
     const [sender, recipient] = await Promise.all([
-      User.findByPk(authenticatedUserId, { attributes: ["id", "name"] }),
-      User.findByPk(parsedRecipientId, { attributes: ["id", "name"] })
+      User.findByPk(authenticatedUserId, { attributes: ["id", "name", "role"] }),
+      User.findByPk(parsedRecipientId, { attributes: ["id", "name", "role"] })
     ]);
 
     if (!sender) {
@@ -248,6 +249,18 @@ export class MessagesController {
 
     if (!recipient) {
       return res.status(404).json({ message: "Destinatario nao encontrado" });
+    }
+
+    const senderIsProfessional = sender.role === "professional";
+    const recipientIsProfessional = recipient.role === "professional";
+    const requiresAcceptedOrder =
+      (senderIsProfessional && recipient.role === "user") ||
+      (recipientIsProfessional && sender.role === "user");
+
+    if (requiresAcceptedOrder && !canUsersChat(authenticatedUserId, parsedRecipientId)) {
+      return res.status(403).json({
+        message: "Chat liberado somente apos o profissional aceitar o pedido"
+      });
     }
 
     const conversation = await findOrCreateConversation(authenticatedUserId, parsedRecipientId);
@@ -348,6 +361,80 @@ export class MessagesController {
     }
 
     await message.destroy();
+    return res.status(204).send();
+  }
+
+  static async destroyConversation(req: Request<{ id: string }>, res: Response) {
+    const authenticatedUserId = req.user?.id ?? null;
+    if (!authenticatedUserId) {
+      return res.status(401).json({ message: "Token de autenticacao invalido ou ausente" });
+    }
+
+    const conversationId = parsePositiveInteger(req.params.id);
+    if (!conversationId) return res.status(400).json({ message: "id invalido" });
+
+    const conversation = await Conversation.findByPk(conversationId);
+    if (!conversation) {
+      return res.status(404).json({ message: "Conversa nao encontrada" });
+    }
+
+    if (conversation.user1 !== authenticatedUserId && conversation.user2 !== authenticatedUserId) {
+      return res.status(403).json({ message: "Voce nao pode remover esta conversa" });
+    }
+
+    await Message.destroy({
+      where: {
+        conversationId
+      }
+    });
+
+    await conversation.destroy();
+    return res.status(204).send();
+  }
+
+  static async destroyConversationWithUser(req: Request<{ userId: string }>, res: Response) {
+    const authenticatedUserId = req.user?.id ?? null;
+    if (!authenticatedUserId) {
+      return res.status(401).json({ message: "Token de autenticacao invalido ou ausente" });
+    }
+
+    const otherUserId = parsePositiveInteger(req.params.userId);
+    if (!otherUserId) return res.status(400).json({ message: "userId invalido" });
+    if (otherUserId === authenticatedUserId) {
+      return res.status(400).json({ message: "Nao e permitido apagar conversa com voce mesmo" });
+    }
+
+    const participantsWhere = {
+      [Op.or]: [
+        { user1: authenticatedUserId, user2: otherUserId },
+        { user1: otherUserId, user2: authenticatedUserId }
+      ]
+    };
+
+    const conversation = await Conversation.findOne({
+      where: participantsWhere
+    });
+
+    if (conversation) {
+      await conversation.destroy();
+      return res.status(204).send();
+    }
+
+    await Message.destroy({
+      where: {
+        [Op.or]: [
+          {
+            senderId: authenticatedUserId,
+            receiverId: otherUserId
+          },
+          {
+            senderId: otherUserId,
+            receiverId: authenticatedUserId
+          }
+        ]
+      }
+    });
+
     return res.status(204).send();
   }
 }

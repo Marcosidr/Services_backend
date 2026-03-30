@@ -10,15 +10,31 @@ import {
 } from "../models";
 import { findOrCreateConversation } from "../services/conversationService";
 import { createNotification } from "../services/notificationService";
+import {
+  canUsersChat,
+  createServiceOrder,
+  getOrderForProfessional,
+  getOrderForRequester,
+  hasPendingOrInProgressOrder,
+  listOrdersForProfessional,
+  listOrdersForRequester,
+  setOrderRating,
+  updateOrderStatus
+} from "../services/orderService";
 
 type DashboardOrderStatus = "concluido" | "em andamento" | "cancelado" | "aguardando";
 
 type DashboardOrder = {
   id: string;
   userId: number;
+  requesterId: string;
+  requesterName: string;
+  requesterPhoto?: string;
   professionalId: string;
   professionalName: string;
+  professionalPhoto?: string;
   category: string;
+  description?: string | null;
   date: string;
   price: number;
   status: DashboardOrderStatus;
@@ -31,9 +47,14 @@ type RateOrderBody = {
   professionalId?: number | string;
 };
 
-const dashboardOrders: DashboardOrder[] = [];
+type CreateOrderBody = {
+  professionalId?: number | string;
+  description?: string;
+  scheduleDate?: string;
+  scheduleTime?: string;
+};
 
-function getAuthenticatedUserId(req: Request) {
+function getAuthenticatedUserId(req: { user?: { id?: number } }) {
   return req.user?.id ?? null;
 }
 
@@ -118,21 +139,22 @@ export class DashboardController {
       return res.status(401).json({ message: "Usuario da sessao nao encontrado" });
     }
 
-    const rawUserOrders = dashboardOrders.filter((item) => item.userId === authenticatedUserId);
+    const rawUserOrders =
+      user.role === "professional"
+        ? listOrdersForProfessional(authenticatedUserId)
+        : listOrdersForRequester(authenticatedUserId);
 
-    const professionalIds = Array.from(
+    const relatedUserIds = Array.from(
       new Set(
-        rawUserOrders
-          .map((item) => parsePositiveInteger(item.professionalId))
-          .filter((professionalId): professionalId is number => Boolean(professionalId))
+        rawUserOrders.flatMap((order) => [order.requesterUserId, order.professionalUserId])
       )
     );
 
-    const professionals = professionalIds.length
+    const relatedUsers = relatedUserIds.length
       ? await User.findAll({
           where: {
             id: {
-              [Op.in]: professionalIds
+              [Op.in]: relatedUserIds
             }
           },
           attributes: ["id", "name", "role"],
@@ -154,7 +176,7 @@ export class DashboardController {
         })
       : [];
 
-    const professionalMap = new Map<
+    const relatedUserMap = new Map<
       number,
       {
         id: string;
@@ -165,14 +187,14 @@ export class DashboardController {
       }
     >();
 
-    for (const professionalUser of professionals) {
-      const categories = (professionalUser.get("categories") as Category[] | undefined) ?? [];
-      const professional = professionalUser.get("professional") as Professional | undefined;
+    for (const relatedUser of relatedUsers) {
+      const categories = (relatedUser.get("categories") as Category[] | undefined) ?? [];
+      const professional = relatedUser.get("professional") as Professional | undefined;
 
-      professionalMap.set(professionalUser.id, {
-        id: String(professionalUser.id),
-        name: professionalUser.name,
-        photo: getUserPhoto(professionalUser),
+      relatedUserMap.set(relatedUser.id, {
+        id: String(relatedUser.id),
+        name: relatedUser.name,
+        photo: getUserPhoto(relatedUser),
         categoryLabel: categories.map((category) => category.label).join(" / "),
         online: Boolean(professional?.online)
       });
@@ -186,27 +208,32 @@ export class DashboardController {
     });
 
     const ratingByOrderId = new Map<string, number>();
-    const ratingByProfessionalId = new Map<number, number>();
 
     for (const review of userReviews) {
       if (review.orderId) {
         ratingByOrderId.set(review.orderId, review.rating);
       }
-
-      ratingByProfessionalId.set(review.professionalUserId, review.rating);
     }
 
-    const userOrders = rawUserOrders.map((item) => {
-      const parsedProfessionalId = parsePositiveInteger(item.professionalId);
-      const professional = parsedProfessionalId ? professionalMap.get(parsedProfessionalId) : null;
+    const userOrders: DashboardOrder[] = rawUserOrders.map((item) => {
+      const professional = relatedUserMap.get(item.professionalUserId);
+      const requester = relatedUserMap.get(item.requesterUserId);
 
       return {
-        ...item,
+        id: item.id,
+        userId: item.requesterUserId,
+        requesterId: String(item.requesterUserId),
+        requesterName: requester?.name ?? item.requesterName,
+        requesterPhoto: requester?.photo ?? "",
+        professionalId: String(item.professionalUserId),
         professionalName: professional?.name ?? item.professionalName,
-        rating:
-          item.rating ??
-          ratingByOrderId.get(item.id) ??
-          (parsedProfessionalId ? ratingByProfessionalId.get(parsedProfessionalId) : undefined),
+        professionalPhoto: professional?.photo ?? "",
+        category: item.category,
+        description: item.description,
+        date: item.date,
+        price: item.price,
+        status: item.status,
+        rating: item.rating ?? ratingByOrderId.get(item.id),
         professional: professional ?? undefined
       };
     });
@@ -245,6 +272,108 @@ export class DashboardController {
     });
   }
 
+  static async createOrder(req: Request<unknown, unknown, CreateOrderBody>, res: Response) {
+    const authenticatedUserId = getAuthenticatedUserId(req);
+    if (!authenticatedUserId) {
+      return res.status(401).json({ message: "Token de autenticacao invalido ou ausente" });
+    }
+
+    const { professionalId, description, scheduleDate, scheduleTime } = req.body;
+    const parsedProfessionalId = parsePositiveInteger(professionalId);
+
+    if (!parsedProfessionalId) {
+      return res.status(400).json({ message: "professionalId invalido" });
+    }
+
+    if (parsedProfessionalId === authenticatedUserId) {
+      return res.status(400).json({ message: "Nao e permitido criar pedido para voce mesmo" });
+    }
+
+    const [requesterUser, professionalUser] = await Promise.all([
+      User.findByPk(authenticatedUserId, {
+        attributes: ["id", "name", "role"]
+      }),
+      User.findByPk(parsedProfessionalId, {
+        attributes: ["id", "name", "role"],
+        include: [
+          {
+            association: "professional",
+            attributes: ["price"]
+          },
+          {
+            association: "categories",
+            attributes: ["label"],
+            through: { attributes: [] }
+          }
+        ]
+      })
+    ]);
+
+    if (!requesterUser) {
+      return res.status(401).json({ message: "Usuario da sessao nao encontrado" });
+    }
+
+    if (!professionalUser || professionalUser.role !== "professional") {
+      return res.status(404).json({ message: "Profissional nao encontrado" });
+    }
+
+    if (hasPendingOrInProgressOrder(authenticatedUserId, parsedProfessionalId)) {
+      return res.status(409).json({
+        message: "Voce ja possui um pedido aberto com este profissional"
+      });
+    }
+
+    const categories = (professionalUser.get("categories") as Category[] | undefined) ?? [];
+    const professional = professionalUser.get("professional") as Professional | undefined;
+
+    const categoryLabel =
+      categories.length > 0
+        ? categories.map((category) => category.label).join(" / ")
+        : "Servico geral";
+
+    let requestDate = new Date().toISOString();
+    if (typeof scheduleDate === "string" && scheduleDate.trim()) {
+      const normalizedDate = scheduleDate.trim();
+      const normalizedTime =
+        typeof scheduleTime === "string" && scheduleTime.trim()
+          ? scheduleTime.trim()
+          : "09:00";
+      const parsedDate = new Date(`${normalizedDate}T${normalizedTime}:00`);
+      if (!Number.isNaN(parsedDate.getTime())) {
+        requestDate = parsedDate.toISOString();
+      }
+    }
+
+    const createdOrder = createServiceOrder({
+      requesterUserId: authenticatedUserId,
+      professionalUserId: parsedProfessionalId,
+      requesterName: requesterUser.name,
+      professionalName: professionalUser.name,
+      category: categoryLabel,
+      description,
+      date: requestDate,
+      price: Number(professional?.price ?? 0)
+    });
+
+    await createNotification({
+      userId: parsedProfessionalId,
+      type: "order_request",
+      title: "Novo pedido de atendimento",
+      message: `${requesterUser.name} enviou um pedido de atendimento`,
+      metadata: {
+        orderId: createdOrder.id,
+        senderId: requesterUser.id,
+        requesterId: requesterUser.id,
+        target: "orders"
+      }
+    });
+
+    return res.status(201).json({
+      message: "Pedido criado com sucesso",
+      order: createdOrder
+    });
+  }
+
   static async createMessage(req: Request, res: Response) {
     const { professionalId, recipientId, text } = req.body as {
       professionalId?: string;
@@ -267,8 +396,8 @@ export class DashboardController {
     }
 
     const [sender, recipient] = await Promise.all([
-      User.findByPk(authenticatedUserId, { attributes: ["id", "name"] }),
-      User.findByPk(parsedRecipientId, { attributes: ["id", "name"] })
+      User.findByPk(authenticatedUserId, { attributes: ["id", "name", "role"] }),
+      User.findByPk(parsedRecipientId, { attributes: ["id", "name", "role"] })
     ]);
 
     if (!sender) {
@@ -277,6 +406,18 @@ export class DashboardController {
 
     if (!recipient) {
       return res.status(404).json({ message: "Destinatario nao encontrado" });
+    }
+
+    const senderIsProfessional = sender.role === "professional";
+    const recipientIsProfessional = recipient.role === "professional";
+    const requiresAcceptedOrder =
+      (senderIsProfessional && recipient.role === "user") ||
+      (recipientIsProfessional && sender.role === "user");
+
+    if (requiresAcceptedOrder && !canUsersChat(authenticatedUserId, parsedRecipientId)) {
+      return res.status(403).json({
+        message: "Chat liberado somente apos o profissional aceitar o pedido"
+      });
     }
 
     const savedMessage = await Message.create({
@@ -315,12 +456,19 @@ export class DashboardController {
       return res.status(400).json({ message: "rating deve ser um numero entre 1 e 5" });
     }
 
-    const order = dashboardOrders.find(
-      (item) => item.id === orderId && item.userId === authenticatedUserId
-    );
+    const order = getOrderForRequester(orderId, authenticatedUserId);
+    if (!order) {
+      return res.status(404).json({ message: "Pedido nao encontrado" });
+    }
+
+    if (order.status !== "concluido") {
+      return res.status(400).json({
+        message: "A avaliacao so pode ser enviada apos a conclusao do atendimento"
+      });
+    }
 
     const parsedProfessionalId = parsePositiveInteger(
-      professionalId ?? order?.professionalId
+      professionalId ?? order.professionalUserId
     );
 
     if (!parsedProfessionalId) {
@@ -370,16 +518,113 @@ export class DashboardController {
       });
     }
 
-    if (order) {
-      order.rating = rating;
-    }
+    setOrderRating(order, rating);
 
     return res.status(201).json({
       message: "Avaliacao registrada com sucesso"
     });
   }
 
-  static async cancelOrder(req: Request, res: Response) {
+  static async acceptOrder(req: Request<{ orderId: string }>, res: Response) {
+    const { orderId } = req.params;
+    const authenticatedUserId = getAuthenticatedUserId(req);
+    if (!authenticatedUserId) {
+      return res.status(401).json({ message: "Token de autenticacao invalido ou ausente" });
+    }
+
+    if (!orderId) return res.status(400).json({ message: "orderId invalido" });
+
+    const order = getOrderForProfessional(orderId, authenticatedUserId);
+    if (!order) return res.status(404).json({ message: "Pedido nao encontrado" });
+
+    if (order.status !== "aguardando") {
+      return res.status(400).json({ message: "Este pedido nao pode mais ser aceito" });
+    }
+
+    updateOrderStatus(order, "em andamento");
+
+    await createNotification({
+      userId: order.requesterUserId,
+      type: "order_accepted",
+      title: "Pedido aceito",
+      message: `${order.professionalName} aceitou seu pedido e liberou o chat`,
+      metadata: {
+        orderId: order.id,
+        senderId: order.professionalUserId,
+        target: "orders"
+      }
+    });
+
+    return res.status(200).json({ message: "Pedido aceito com sucesso" });
+  }
+
+  static async rejectOrder(req: Request<{ orderId: string }>, res: Response) {
+    const { orderId } = req.params;
+    const authenticatedUserId = getAuthenticatedUserId(req);
+    if (!authenticatedUserId) {
+      return res.status(401).json({ message: "Token de autenticacao invalido ou ausente" });
+    }
+
+    if (!orderId) return res.status(400).json({ message: "orderId invalido" });
+
+    const order = getOrderForProfessional(orderId, authenticatedUserId);
+    if (!order) return res.status(404).json({ message: "Pedido nao encontrado" });
+
+    if (order.status !== "aguardando") {
+      return res.status(400).json({ message: "Este pedido nao pode mais ser recusado" });
+    }
+
+    updateOrderStatus(order, "cancelado");
+
+    await createNotification({
+      userId: order.requesterUserId,
+      type: "order_rejected",
+      title: "Pedido recusado",
+      message: `${order.professionalName} recusou o pedido de atendimento`,
+      metadata: {
+        orderId: order.id,
+        senderId: order.professionalUserId,
+        target: "orders"
+      }
+    });
+
+    return res.status(200).json({ message: "Pedido recusado com sucesso" });
+  }
+
+  static async completeOrder(req: Request<{ orderId: string }>, res: Response) {
+    const { orderId } = req.params;
+    const authenticatedUserId = getAuthenticatedUserId(req);
+    if (!authenticatedUserId) {
+      return res.status(401).json({ message: "Token de autenticacao invalido ou ausente" });
+    }
+
+    if (!orderId) return res.status(400).json({ message: "orderId invalido" });
+
+    const order = getOrderForProfessional(orderId, authenticatedUserId);
+    if (!order) return res.status(404).json({ message: "Pedido nao encontrado" });
+
+    if (order.status !== "em andamento") {
+      return res.status(400).json({ message: "Somente atendimento em andamento pode ser finalizado" });
+    }
+
+    updateOrderStatus(order, "concluido");
+
+    await createNotification({
+      userId: order.requesterUserId,
+      type: "order_completed",
+      title: "Atendimento concluido",
+      message: `${order.professionalName} finalizou o atendimento. Agora voce pode avaliar`,
+      metadata: {
+        orderId: order.id,
+        senderId: order.professionalUserId,
+        target: "orders"
+      }
+    });
+
+    return res.status(200).json({ message: "Atendimento finalizado com sucesso" });
+  }
+
+  static async cancelOrder(req: Request<{ orderId: string }>, res: Response) {
     const { orderId } = req.params;
 
     const authenticatedUserId = getAuthenticatedUserId(req);
@@ -389,12 +634,26 @@ export class DashboardController {
 
     if (!orderId) return res.status(400).json({ message: "orderId invalido" });
 
-    const order = dashboardOrders.find(
-      (item) => item.id === orderId && item.userId === authenticatedUserId
-    );
+    const order = getOrderForRequester(orderId, authenticatedUserId);
     if (!order) return res.status(404).json({ message: "Pedido nao encontrado" });
 
-    order.status = "cancelado";
+    if (order.status === "concluido") {
+      return res.status(400).json({ message: "Nao e possivel cancelar pedido concluido" });
+    }
+
+    updateOrderStatus(order, "cancelado");
+
+    await createNotification({
+      userId: order.professionalUserId,
+      type: "order_canceled",
+      title: "Pedido cancelado",
+      message: `${order.requesterName} cancelou o pedido de atendimento`,
+      metadata: {
+        orderId: order.id,
+        senderId: order.requesterUserId,
+        target: "orders"
+      }
+    });
 
     return res.status(200).json({ message: "Pedido cancelado com sucesso" });
   }
