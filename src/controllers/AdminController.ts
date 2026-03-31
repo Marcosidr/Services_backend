@@ -300,26 +300,26 @@ export class AdminController {
       return res.status(404).json({ message: "Profissional nao encontrado" });
     }
 
-    await professional.update({
-      approvalStatus: "rejected",
-      verified: false,
-      online: false
-    });
+    const userId = professional.userId;
 
+    // Deletar o profissional rejeitado
+    await professional.destroy();
+
+    // Reverter usuario para "user"
     await User.update(
       { role: "user" },
       {
-        where: { id: professional.userId }
+        where: { id: userId }
       }
     );
 
     await createNotification({
-      userId: professional.userId,
+      userId: userId,
       type: "professional_rejected",
       title: "Cadastro profissional recusado",
       message: "Seu cadastro profissional foi recusado. Revise os dados e tente novamente.",
       metadata: {
-        professionalId: professional.id
+        professionalId: professionalId
       }
     });
 

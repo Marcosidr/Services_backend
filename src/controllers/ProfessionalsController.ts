@@ -481,12 +481,20 @@ export class ProfessionalsController {
     });
 
     const professionalUserIds = users
-      .filter((user) => Boolean(user.get("professional")))
+      .filter((user) => {
+        const professional = user.get("professional") as Professional | undefined;
+        // Apenas professionais aprovados
+        return professional && professional.approvalStatus === "approved";
+      })
       .map((user) => user.id);
     const reviewSnapshots = await buildReviewSnapshots(professionalUserIds);
 
     let professionals = users
-      .filter((user) => Boolean(user.get("professional")))
+      .filter((user) => {
+        const professional = user.get("professional") as Professional | undefined;
+        // Apenas professionais aprovados
+        return professional && professional.approvalStatus === "approved";
+      })
       .map((user) =>
         sanitizeProfessional(user, reviewSnapshots.get(user.id), requesterLocation)
       );
