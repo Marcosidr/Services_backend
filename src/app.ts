@@ -8,12 +8,18 @@ import professionalsRouter from "./routes/professionals.routes";
 import adminRouter from "./routes/admin.routes";
 import messagesRouter from "./routes/messages.routes";
 import notificationsRouter from "./routes/notifications.routes";
+import {
+  errorEnvelopeMiddleware,
+  errorHandler,
+  notFoundHandler
+} from "./middlewares/errorHandlers";
 
 export function createApp() {
   const app = express();
 
   app.use(cors());
   app.use(express.json());
+  app.use(errorEnvelopeMiddleware);
 
   app.get("/api/health", (_req, res) => {
     res.json({ status: "Backend online" });
@@ -27,6 +33,8 @@ export function createApp() {
   app.use("/api/admin", adminRouter);
   app.use("/api/messages", messagesRouter);
   app.use("/api/notifications", notificationsRouter);
+  app.use(notFoundHandler);
+  app.use(errorHandler);
 
   return app;
 }
