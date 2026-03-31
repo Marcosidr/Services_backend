@@ -543,6 +543,11 @@ export class DashboardController {
       return res.status(400).json({ message: "Este pedido nao pode mais ser aceito" });
     }
 
+    // Validacao defensiva: garantir que nao eh auto-notificacao
+    if (order.requesterUserId === order.professionalUserId) {
+      return res.status(400).json({ message: "Nao e permitido aceitar pedido para voce mesmo" });
+    }
+
     await updateOrderStatus(order, "em andamento");
 
     await createNotification({
@@ -574,6 +579,11 @@ export class DashboardController {
 
     if (order.status !== "aguardando") {
       return res.status(400).json({ message: "Este pedido nao pode mais ser recusado" });
+    }
+
+    // Validacao defensiva: garantir que nao eh auto-notificacao
+    if (order.requesterUserId === order.professionalUserId) {
+      return res.status(400).json({ message: "Nao e permitido recusar pedido para voce mesmo" });
     }
 
     await updateOrderStatus(order, "cancelado");
@@ -609,6 +619,11 @@ export class DashboardController {
       return res.status(400).json({ message: "Somente atendimento em andamento pode ser finalizado" });
     }
 
+    // Validacao defensiva: garantir que nao eh auto-notificacao
+    if (order.requesterUserId === order.professionalUserId) {
+      return res.status(400).json({ message: "Nao e permitido completar pedido para voce mesmo" });
+    }
+
     await updateOrderStatus(order, "concluido");
 
     await createNotification({
@@ -641,6 +656,11 @@ export class DashboardController {
 
     if (order.status === "concluido") {
       return res.status(400).json({ message: "Nao e possivel cancelar pedido concluido" });
+    }
+
+    // Validacao defensiva: garantir que nao eh auto-notificacao
+    if (order.requesterUserId === order.professionalUserId) {
+      return res.status(400).json({ message: "Nao e permitido cancelar pedido para voce mesmo" });
     }
 
     await updateOrderStatus(order, "cancelado");
