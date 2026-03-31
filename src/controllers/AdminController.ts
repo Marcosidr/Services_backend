@@ -374,9 +374,19 @@ export class AdminController {
     req: Request<unknown, unknown, AdminAnnouncementPayload>,
     res: Response
   ) {
+    const authenticatedUserId = req.user?.id ?? null;
+    if (!authenticatedUserId) {
+      return res.status(401).json({ message: "Token de autenticacao invalido ou ausente" });
+    }
+
     const parsedUserId = parsePositiveInteger(req.body.userId);
     if (!parsedUserId) {
       return res.status(400).json({ message: "userId invalido" });
+    }
+
+    // Validacao: nao permitir enviar aviso para si mesmo
+    if (parsedUserId === authenticatedUserId) {
+      return res.status(400).json({ message: "Nao e permitido enviar aviso para voce mesmo" });
     }
 
     const title = typeof req.body.title === "string" ? req.body.title.trim() : "";
@@ -398,7 +408,7 @@ export class AdminController {
       title,
       message,
       metadata: {
-        createdByAdminId: req.user?.id ?? null
+        createdByAdminId: authenticatedUserId
       }
     });
 
