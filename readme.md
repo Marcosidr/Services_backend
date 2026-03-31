@@ -43,10 +43,12 @@ Notas:
 1. `DB_SSL=true` para bancos cloud.
 2. Se usar Postgres local (`localhost`), use `DB_SSL=false`.
 3. `DB_SYNC_ALTER` so use `true` quando souber exatamente o impacto.
+4. Schema novo deve ser aplicado por migration (`db:migrate`), sem autoajuste no bootstrap.
 
 ## 5. Rodar backend em desenvolvimento
 
 ```bash
+npm run db:migrate
 npm run dev
 ```
 
@@ -85,18 +87,10 @@ DATABASE_URL=postgres://postgres:postgres@localhost:5433/zentry_test
 DB_SSL=false
 ```
 
-### 6.3 Rodar migracao SQL no banco de teste
-
-Opcao A (com `psql` instalado localmente):
+### 6.3 Rodar migrations no banco de teste
 
 ```bash
-psql "postgres://postgres:postgres@localhost:5433/zentry_test" -f "E:\Projeto React\backend\sql\migrations\20260330_001_create_service_orders.sql"
-```
-
-Opcao B (sem `psql` local, usando o proprio container):
-
-```bash
-Get-Content "E:\Projeto React\backend\sql\migrations\20260330_001_create_service_orders.sql" | docker exec -i zentry-test-pg psql -U postgres -d zentry_test
+npm run db:migrate:test
 ```
 
 ## 7. Scripts uteis
@@ -106,6 +100,10 @@ npm run dev
 npm run dev:test
 npm run build
 npm run start
+npm run db:migrate
+npm run db:migrate:test
+npm run db:migrate:undo
+npm run db:migrate:status
 npm run test
 npm run test:watch
 npm run test:coverage
@@ -115,17 +113,18 @@ npm run test:coverage
 
 1. `dev`: usa `.env` (ambiente principal).
 2. `dev:test`: usa `.env.test` (ambiente local de teste).
-3. `test*`: roda Jest com `.env.test`.
+3. `db:migrate*`: aplica/consulta migrations versionadas.
+4. `test*`: roda Jest com `.env.test` (testes em `backend/test`).
 
 ## 8. Fluxo recomendado para novos devs
 
 1. Clonar o projeto.
 2. Rodar `npm install`.
 3. Configurar `.env`.
-4. Rodar `npm run dev`.
-5. Para testes seguros sem custo cloud:
+4. Rodar `npm run db:migrate`.
+5. Rodar `npm run dev`.
+6. Para testes seguros sem custo cloud:
    1. Subir Postgres Docker local.
    2. Configurar `.env.test`.
-   3. Rodar migracao SQL.
+   3. Rodar `npm run db:migrate:test`.
    4. Rodar `npm run dev:test` e `npm run test`.
-
