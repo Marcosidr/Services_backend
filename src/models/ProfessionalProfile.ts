@@ -29,6 +29,8 @@ export class Professional extends Model<
   declare areaKm: CreationOptional<number>;
   declare cep: string | null;
   declare city: string | null;
+  declare latitude: number | null;
+  declare longitude: number | null;
   declare online: CreationOptional<boolean>;
   declare verified: CreationOptional<boolean>;
   declare approvalStatus: CreationOptional<"pending" | "approved" | "rejected">;
@@ -94,6 +96,22 @@ export function initProfessionalModel(sequelize: Sequelize) {
       city: {
         type: DataTypes.STRING(120),
         allowNull: true
+      },
+      latitude: {
+        type: DataTypes.DOUBLE,
+        allowNull: true,
+        validate: {
+          min: -90,
+          max: 90
+        }
+      },
+      longitude: {
+        type: DataTypes.DOUBLE,
+        allowNull: true,
+        validate: {
+          min: -180,
+          max: 180
+        }
       },
       online: {
         type: DataTypes.BOOLEAN,

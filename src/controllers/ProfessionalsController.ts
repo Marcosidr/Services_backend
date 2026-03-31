@@ -36,6 +36,8 @@ type RegisterProfessionalBody = {
   estado?: string;
   online?: boolean | string;
   photoUrl?: string;
+  latitude?: string | number;
+  longitude?: string | number;
   categoryIds?: unknown;
   categoryId?: unknown;
   "categoryIds[]"?: unknown;
@@ -54,6 +56,8 @@ type UpgradeProfessionalBody = {
   city?: string;
   online?: boolean | string;
   photoUrl?: string;
+  latitude?: string | number;
+  longitude?: string | number;
   categoryIds?: unknown;
   categoryId?: unknown;
   "categoryIds[]"?: unknown;
@@ -69,6 +73,8 @@ type UpdateProfessionalProfileBody = {
   city?: string;
   online?: boolean | string;
   photoUrl?: string;
+  latitude?: string | number;
+  longitude?: string | number;
 };
 
 type SanitizedReview = {
@@ -84,6 +90,17 @@ type ReviewSnapshot = {
   rating: number;
   reviews: number;
   reviewList: SanitizedReview[];
+};
+
+type CoordinateParseResult = {
+  provided: boolean;
+  value: number | null;
+  invalid: boolean;
+};
+
+type GeoPoint = {
+  latitude: number;
+  longitude: number;
 };
 
 function parseCategoryFilter(value: unknown) {
@@ -175,6 +192,54 @@ function parseOptionalNumber(value: unknown) {
   return parsed;
 }
 
+function parseCoordinate(
+  value: unknown,
+  min: number,
+  max: number
+): CoordinateParseResult {
+  if (typeof value === "undefined" || value === null) {
+    return { provided: false, value: null, invalid: false };
+  }
+
+  if (typeof value === "string" && !value.trim()) {
+    return { provided: false, value: null, invalid: false };
+  }
+
+  const parsed =
+    typeof value === "number"
+      ? value
+      : Number(String(value).trim().replace(",", "."));
+
+  if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
+    return { provided: true, value: null, invalid: true };
+  }
+
+  return { provided: true, value: parsed, invalid: false };
+}
+
+function parseLatitude(value: unknown) {
+  return parseCoordinate(value, -90, 90);
+}
+
+function parseLongitude(value: unknown) {
+  return parseCoordinate(value, -180, 180);
+}
+
+function validateCoordinatePair(
+  latitude: CoordinateParseResult,
+  longitude: CoordinateParseResult
+) {
+  if (latitude.invalid || longitude.invalid) {
+    return "Latitude/longitude invalidas";
+  }
+
+  if (latitude.provided !== longitude.provided) {
+    return "Informe latitude e longitude juntas";
+  }
+
+  return null;
+}
+
 function parseOnlineFlag(value: unknown) {
   if (typeof value === "boolean") return value;
   if (typeof value === "string") {
@@ -200,6 +265,28 @@ function formatReviewDate(value: Date) {
   return value.toLocaleDateString("pt-BR");
 }
 
+function toRadians(value: number) {
+  return (value * Math.PI) / 180;
+}
+
+function calculateDistanceKm(from: GeoPoint, to: GeoPoint) {
+  const earthRadiusKm = 6371;
+  const latDelta = toRadians(to.latitude - from.latitude);
+  const lonDelta = toRadians(to.longitude - from.longitude);
+  const fromLatitude = toRadians(from.latitude);
+  const toLatitude = toRadians(to.latitude);
+
+  const haversine =
+    Math.sin(latDelta / 2) * Math.sin(latDelta / 2) +
+    Math.cos(fromLatitude) *
+      Math.cos(toLatitude) *
+      Math.sin(lonDelta / 2) *
+      Math.sin(lonDelta / 2);
+
+  const arc = 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
+  return Number((earthRadiusKm * arc).toFixed(1));
+}
+
 function categoriesInclude() {
   return [
     {
@@ -219,6 +306,8 @@ function categoriesInclude() {
         "areaKm",
         "cep",
         "city",
+        "latitude",
+        "longitude",
         "online",
         "verified",
         "approvalStatus",
@@ -232,7 +321,11 @@ function categoriesInclude() {
   ];
 }
 
-function sanitizeProfessional(user: User, reviewSnapshot?: ReviewSnapshot) {
+function sanitizeProfessional(
+  user: User,
+  reviewSnapshot?: ReviewSnapshot,
+  requesterLocation?: GeoPoint | null
+) {
   const categories = (user.get("categories") as Category[] | undefined) ?? [];
   const professional = user.get("professional") as Professional | undefined;
   const profile = user.get("profile") as UserProfile | undefined;
@@ -244,6 +337,19 @@ function sanitizeProfessional(user: User, reviewSnapshot?: ReviewSnapshot) {
     normalizePhotoUrl(profile?.photoUrl);
   const rating = reviewSnapshot?.rating ?? 0;
   const reviews = reviewSnapshot?.reviews ?? 0;
+  const professionalLatitude =
+    typeof professional?.latitude === "number" ? professional.latitude : null;
+  const professionalLongitude =
+    typeof professional?.longitude === "number" ? professional.longitude : null;
+  const distance =
+    requesterLocation &&
+    professionalLatitude !== null &&
+    professionalLongitude !== null
+      ? calculateDistanceKm(requesterLocation, {
+          latitude: professionalLatitude,
+          longitude: professionalLongitude
+        })
+      : null;
 
   return {
     id: String(user.id),
@@ -256,7 +362,7 @@ function sanitizeProfessional(user: User, reviewSnapshot?: ReviewSnapshot) {
     rating,
     reviews,
     city: professional?.city ?? "",
-    distance: 0,
+    distance,
     completedJobs: reviews,
     area: professional?.areaKm ?? 10,
     description: professional?.description ?? "",
@@ -371,6 +477,8 @@ async function saveProfessionalData(
     city?: string;
     online?: boolean | string;
     photoUrl?: string;
+    latitude?: number | null;
+    longitude?: number | null;
   },
   categoryIds: number[],
   transaction: Transaction
@@ -389,6 +497,14 @@ async function saveProfessionalData(
       areaKm: parsedArea && parsedArea > 0 ? Math.round(parsedArea) : 10,
       cep: professionalBody.cep?.trim() || null,
       city: professionalBody.city?.trim() || null,
+      latitude:
+        typeof professionalBody.latitude === "number"
+          ? professionalBody.latitude
+          : null,
+      longitude:
+        typeof professionalBody.longitude === "number"
+          ? professionalBody.longitude
+          : null,
       online: parseOnlineFlag(professionalBody.online),
       verified: false,
       approvalStatus: "pending",
@@ -410,6 +526,24 @@ export class ProfessionalsController {
   static async index(req: Request, res: Response) {
     const categoryFilter = parseCategoryFilter(req.query.categoryId ?? req.query.cat);
     const textFilter = parseTextFilter(req.query.q);
+    const queryLatitude = parseLatitude(req.query.lat ?? req.query.latitude);
+    const queryLongitude = parseLongitude(req.query.lng ?? req.query.longitude);
+    const queryCoordinateError = validateCoordinatePair(queryLatitude, queryLongitude);
+
+    if (queryCoordinateError) {
+      return res.status(400).json({ message: queryCoordinateError });
+    }
+
+    const requesterLocation =
+      queryLatitude.provided &&
+      queryLongitude.provided &&
+      queryLatitude.value !== null &&
+      queryLongitude.value !== null
+        ? {
+            latitude: queryLatitude.value,
+            longitude: queryLongitude.value
+          }
+        : null;
 
     const users = await User.findAll({
       where: { role: "professional" },
@@ -425,7 +559,9 @@ export class ProfessionalsController {
 
     let professionals = users
       .filter((user) => Boolean(user.get("professional")))
-      .map((user) => sanitizeProfessional(user, reviewSnapshots.get(user.id)));
+      .map((user) =>
+        sanitizeProfessional(user, reviewSnapshots.get(user.id), requesterLocation)
+      );
 
     if (categoryFilter) {
       professionals = professionals.filter((professional) =>
@@ -446,6 +582,21 @@ export class ProfessionalsController {
           .toLowerCase();
 
         return searchableText.includes(textFilter);
+      });
+    }
+
+    if (requesterLocation) {
+      professionals = professionals.sort((first, second) => {
+        const firstDistance =
+          typeof first.distance === "number" ? first.distance : Number.POSITIVE_INFINITY;
+        const secondDistance =
+          typeof second.distance === "number" ? second.distance : Number.POSITIVE_INFINITY;
+
+        if (firstDistance !== secondDistance) {
+          return firstDistance - secondDistance;
+        }
+
+        return second.rating - first.rating;
       });
     }
 
@@ -474,9 +625,18 @@ export class ProfessionalsController {
       estado,
       online,
       photoUrl,
+      latitude,
+      longitude,
       categoryIds,
       categoryId
     } = req.body as RegisterProfessionalBody;
+
+    const parsedLatitude = parseLatitude(latitude);
+    const parsedLongitude = parseLongitude(longitude);
+    const coordinateError = validateCoordinatePair(parsedLatitude, parsedLongitude);
+    if (coordinateError) {
+      return res.status(400).json({ message: coordinateError });
+    }
 
     const parsedCategoryIds =
       parseCategoryIds(
@@ -664,7 +824,9 @@ export class ProfessionalsController {
           cep: normalizedCep,
           city: city.trim(),
           online,
-          photoUrl
+          photoUrl,
+          latitude: parsedLatitude.value,
+          longitude: parsedLongitude.value
         },
         parsedCategoryIds,
         transaction
@@ -721,9 +883,18 @@ export class ProfessionalsController {
       city,
       online,
       photoUrl,
+      latitude,
+      longitude,
       categoryIds,
       categoryId
     } = req.body as UpgradeProfessionalBody;
+
+    const parsedLatitude = parseLatitude(latitude);
+    const parsedLongitude = parseLongitude(longitude);
+    const coordinateError = validateCoordinatePair(parsedLatitude, parsedLongitude);
+    if (coordinateError) {
+      return res.status(400).json({ message: coordinateError });
+    }
 
     const parsedUserId = parseUserId(userId);
     if (!parsedUserId) {
@@ -806,7 +977,9 @@ export class ProfessionalsController {
           cep,
           city,
           online,
-          photoUrl
+          photoUrl,
+          latitude: parsedLatitude.value,
+          longitude: parsedLongitude.value
         },
         parsedCategoryIds,
         transaction
@@ -863,7 +1036,19 @@ export class ProfessionalsController {
     }
 
     const reviewSnapshots = await buildReviewSnapshots([professionalUser.id]);
-    return res.json(sanitizeProfessional(professionalUser, reviewSnapshots.get(professionalUser.id)));
+    const professionalProfile = professionalUser.get("professional") as Professional;
+
+    return res.json({
+      ...sanitizeProfessional(professionalUser, reviewSnapshots.get(professionalUser.id)),
+      latitude:
+        typeof professionalProfile.latitude === "number"
+          ? professionalProfile.latitude
+          : null,
+      longitude:
+        typeof professionalProfile.longitude === "number"
+          ? professionalProfile.longitude
+          : null
+    });
   }
 
   static async updateMyProfile(req: Request<unknown, unknown, UpdateProfessionalProfileBody>, res: Response) {
@@ -888,8 +1073,17 @@ export class ProfessionalsController {
       cep,
       city,
       online,
-      photoUrl
+      photoUrl,
+      latitude,
+      longitude
     } = req.body;
+
+    const parsedLatitude = parseLatitude(latitude);
+    const parsedLongitude = parseLongitude(longitude);
+    const coordinateError = validateCoordinatePair(parsedLatitude, parsedLongitude);
+    if (coordinateError) {
+      return res.status(400).json({ message: coordinateError });
+    }
 
     if (typeof cep === "string" && cep.trim() && !isValidCep(cep)) {
       return res.status(400).json({ message: "CEP invalido" });
@@ -918,7 +1112,9 @@ export class ProfessionalsController {
         : {}),
       ...(typeof city !== "undefined" ? { city: normalizeOptionalText(city) } : {}),
       ...(typeof online !== "undefined" ? { online: parseOnlineFlag(online) } : {}),
-      ...(typeof photoUrl !== "undefined" ? { photoUrl: normalizePhotoUrl(photoUrl) || null } : {})
+      ...(typeof photoUrl !== "undefined" ? { photoUrl: normalizePhotoUrl(photoUrl) || null } : {}),
+      ...(parsedLatitude.provided ? { latitude: parsedLatitude.value } : {}),
+      ...(parsedLongitude.provided ? { longitude: parsedLongitude.value } : {})
     });
 
     const professionalUser = await User.findByPk(authenticatedUserId, {
@@ -931,10 +1127,21 @@ export class ProfessionalsController {
     }
 
     const reviewSnapshots = await buildReviewSnapshots([professionalUser.id]);
+    const savedProfessional = professionalUser.get("professional") as Professional | undefined;
 
     return res.json({
       message: "Perfil profissional atualizado com sucesso",
-      professional: sanitizeProfessional(professionalUser, reviewSnapshots.get(professionalUser.id))
+      professional: {
+        ...sanitizeProfessional(professionalUser, reviewSnapshots.get(professionalUser.id)),
+        latitude:
+          typeof savedProfessional?.latitude === "number"
+            ? savedProfessional.latitude
+            : null,
+        longitude:
+          typeof savedProfessional?.longitude === "number"
+            ? savedProfessional.longitude
+            : null
+      }
     });
   }
 
