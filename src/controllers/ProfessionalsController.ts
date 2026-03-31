@@ -9,6 +9,7 @@ import {
   UserProfile
 } from "../models";
 import { createNotification } from "../services/notificationService";
+import { buildProfessionalProfileUpdatePayload } from "../services/professionalProfileService";
 import { isValidCep, normalizeCep } from "../utils/cep";
 import { isValidCpf, normalizeCpf } from "../utils/cpf";
 import { getEmailValidationError, normalizeEmail } from "../utils/email";
@@ -19,7 +20,7 @@ import {
   validateCoordinatePair
 } from "../utils/geo";
 import type { GeoPoint } from "../utils/geo";
-import { parsePagination } from "../utils/pagination";
+import { paginateItems, parsePagination } from "../utils/pagination";
 import { getPasswordValidationError, hashPassword, verifyPassword } from "../utils/password";
 import { getPhoneValidationError, normalizePhone } from "../utils/phone";
 
@@ -533,14 +534,7 @@ export class ProfessionalsController {
     });
 
     if (pagination) {
-      const pagedItems = professionals.slice(
-        pagination.offset,
-        pagination.offset + pagination.limit
-      );
-      res.setHeader("X-Total-Count", String(professionals.length));
-      res.setHeader("X-Page", String(pagination.page));
-      res.setHeader("X-Limit", String(pagination.limit));
-      return res.json(pagedItems);
+      return res.json(paginateItems(professionals, pagination));
     }
 
     return res.json(professionals);
@@ -1007,58 +1001,12 @@ export class ProfessionalsController {
       return res.status(404).json({ message: "Perfil profissional nao encontrado" });
     }
 
-    const {
-      description,
-      experience,
-      price,
-      priceUnit,
-      area,
-      cep,
-      city,
-      online,
-      photoUrl,
-      latitude,
-      longitude
-    } = req.body;
-
-    const parsedLatitude = parseLatitude(latitude);
-    const parsedLongitude = parseLongitude(longitude);
-    const coordinateError = validateCoordinatePair(parsedLatitude, parsedLongitude);
-    if (coordinateError) {
-      return res.status(400).json({ message: coordinateError });
+    const profileUpdate = buildProfessionalProfileUpdatePayload(req.body, professional.areaKm);
+    if (!profileUpdate.ok) {
+      return res.status(profileUpdate.status).json({ message: profileUpdate.message });
     }
 
-    if (typeof cep === "string" && cep.trim() && !isValidCep(cep)) {
-      return res.status(400).json({ message: "CEP invalido" });
-    }
-
-    const parsedPrice = parseOptionalNumber(price);
-    if (typeof price !== "undefined" && price !== null && price !== "" && parsedPrice === null) {
-      return res.status(400).json({ message: "price invalido" });
-    }
-
-    const parsedArea = parseOptionalNumber(area);
-    if (typeof area !== "undefined" && area !== null && area !== "" && parsedArea === null) {
-      return res.status(400).json({ message: "area invalida" });
-    }
-
-    await professional.update({
-      ...(typeof description !== "undefined" ? { description: normalizeOptionalText(description) } : {}),
-      ...(typeof experience !== "undefined" ? { experience: normalizeOptionalText(experience) } : {}),
-      ...(typeof price !== "undefined" ? { price: parsedPrice } : {}),
-      ...(typeof priceUnit !== "undefined" ? { priceUnit: normalizeOptionalText(priceUnit) ?? "servico" } : {}),
-      ...(typeof area !== "undefined"
-        ? { areaKm: parsedArea && parsedArea > 0 ? Math.round(parsedArea) : professional.areaKm }
-        : {}),
-      ...(typeof cep !== "undefined"
-        ? { cep: typeof cep === "string" && cep.trim() ? normalizeCep(cep) : null }
-        : {}),
-      ...(typeof city !== "undefined" ? { city: normalizeOptionalText(city) } : {}),
-      ...(typeof online !== "undefined" ? { online: parseOnlineFlag(online) } : {}),
-      ...(typeof photoUrl !== "undefined" ? { photoUrl: normalizePhotoUrl(photoUrl) || null } : {}),
-      ...(parsedLatitude.provided ? { latitude: parsedLatitude.value } : {}),
-      ...(parsedLongitude.provided ? { longitude: parsedLongitude.value } : {})
-    });
+    await professional.update(profileUpdate.payload);
 
     const professionalUser = await User.findByPk(authenticatedUserId, {
       attributes: ["id", "name", "email", "phone", "role", "createdAt", "updatedAt"],

@@ -9,6 +9,18 @@ export type PaginationResult = {
   offset: number;
 };
 
+export type PaginationMeta = {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+  hasNext: boolean;
+};
+
+export type PaginatedResponse<T> = PaginationMeta & {
+  items: T[];
+};
+
 const MAX_LIMIT = 100;
 const DEFAULT_LIMIT = 20;
 
@@ -35,4 +47,35 @@ export function parsePagination(input: PaginationInput): PaginationResult | null
     limit,
     offset: (parsedPage - 1) * limit
   };
+}
+
+export function buildPaginationMeta(total: number, pagination: PaginationResult): PaginationMeta {
+  const totalPages = total === 0 ? 0 : Math.ceil(total / pagination.limit);
+
+  return {
+    page: pagination.page,
+    limit: pagination.limit,
+    total,
+    totalPages,
+    hasNext: pagination.page < totalPages
+  };
+}
+
+export function createPaginatedResponse<T>(
+  items: T[],
+  total: number,
+  pagination: PaginationResult
+): PaginatedResponse<T> {
+  return {
+    items,
+    ...buildPaginationMeta(total, pagination)
+  };
+}
+
+export function paginateItems<T>(
+  items: T[],
+  pagination: PaginationResult
+): PaginatedResponse<T> {
+  const pagedItems = items.slice(pagination.offset, pagination.offset + pagination.limit);
+  return createPaginatedResponse(pagedItems, items.length, pagination);
 }

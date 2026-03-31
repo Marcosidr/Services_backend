@@ -39,6 +39,8 @@ type UpdatePhotoBody = {
 };
 
 type UpdateProfileBody = {
+  email?: string;
+  cpf?: string;
   name?: string;
   phone?: string;
   cep?: string;
@@ -51,6 +53,8 @@ type UpdateProfileBody = {
   estado?: string;
   photoUrl?: string;
   bio?: string;
+  password?: string;
+  confirmPassword?: string;
 };
 
 function normalizeOptionalText(value: string | undefined) {
@@ -364,6 +368,8 @@ export class AuthController {
     }
 
     const {
+      email,
+      cpf,
       name,
       phone,
       cep,
@@ -375,8 +381,55 @@ export class AuthController {
       uf,
       estado,
       photoUrl,
-      bio
+      bio,
+      password,
+      confirmPassword
     } = req.body;
+
+    if (typeof email !== "undefined") {
+      const normalizedIncomingEmail = typeof email === "string" ? normalizeEmail(email) : "";
+      if (!normalizedIncomingEmail || normalizedIncomingEmail !== user.email) {
+        return res.status(400).json({ message: "Nao e permitido alterar email" });
+      }
+    }
+
+    if (typeof cpf !== "undefined") {
+      const normalizedIncomingCpf = typeof cpf === "string" ? normalizeCpf(cpf) : "";
+      if (!normalizedIncomingCpf || !isValidCpf(normalizedIncomingCpf)) {
+        return res.status(400).json({ message: "CPF invalido" });
+      }
+
+      if (normalizedIncomingCpf !== user.cpf) {
+        return res.status(400).json({ message: "Nao e permitido alterar CPF" });
+      }
+    }
+
+    const hasPasswordField = typeof password !== "undefined";
+    const hasConfirmPasswordField = typeof confirmPassword !== "undefined";
+    const normalizedPassword = typeof password === "string" ? password.trim() : "";
+    const normalizedConfirmPassword =
+      typeof confirmPassword === "string" ? confirmPassword.trim() : "";
+
+    if (hasConfirmPasswordField && !hasPasswordField && normalizedConfirmPassword) {
+      return res.status(400).json({ message: "Informe a nova senha para confirmar" });
+    }
+
+    if (hasPasswordField && normalizedPassword) {
+      if (!normalizedConfirmPassword) {
+        return res.status(400).json({ message: "Confirme a nova senha" });
+      }
+
+      if (normalizedPassword !== normalizedConfirmPassword) {
+        return res.status(400).json({ message: "As senhas nao coincidem" });
+      }
+
+      const passwordValidationError = getPasswordValidationError(normalizedPassword);
+      if (passwordValidationError) {
+        return res.status(400).json({ message: passwordValidationError });
+      }
+    } else if (hasConfirmPasswordField && normalizedConfirmPassword) {
+      return res.status(400).json({ message: "Informe a nova senha para confirmar" });
+    }
 
     if (typeof phone === "string" && phone.trim()) {
       const phoneValidationError = getPhoneValidationError(phone);
@@ -418,7 +471,8 @@ export class AuthController {
             uf: typeof uf === "string" && uf.trim() ? uf.trim().toUpperCase() : null
           }
         : {}),
-      ...(typeof estado !== "undefined" ? { estado: normalizeOptionalText(estado) } : {})
+      ...(typeof estado !== "undefined" ? { estado: normalizeOptionalText(estado) } : {}),
+      ...(normalizedPassword ? { password: hashPassword(normalizedPassword) } : {})
     });
 
     if (typeof photoUrl !== "undefined" || typeof bio !== "undefined") {

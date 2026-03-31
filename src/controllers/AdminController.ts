@@ -9,6 +9,7 @@ import {
   UserProfile
 } from "../models";
 import { createNotification } from "../services/notificationService";
+import { createPaginatedResponse, parsePagination } from "../utils/pagination";
 
 type AdminUserStatus = "ativo" | "bloqueado";
 type ProfessionalStatus = "online" | "offline";
@@ -63,6 +64,21 @@ function getUserPhoto(user: User) {
   const professional = getUserProfessional(user);
   const profile = user.get("profile") as UserProfile | undefined;
   return normalizePhotoUrl(professional?.photoUrl) || normalizePhotoUrl(profile?.photoUrl);
+}
+
+function sanitizeAnnouncement(announcement: Notification) {
+  const user = announcement.get("user") as User | undefined;
+
+  return {
+    id: String(announcement.id),
+    userId: announcement.userId,
+    userName: user?.name ?? "",
+    userEmail: user?.email ?? "",
+    title: announcement.title,
+    message: announcement.message,
+    isRead: announcement.isRead,
+    createdAt: announcement.createdAt
+  };
 }
 
 function buildCategoryDistribution(approvedUsers: User[]) {
@@ -311,6 +327,34 @@ export class AdminController {
   }
 
   static async listAnnouncements(req: Request, res: Response) {
+    const pagination = parsePagination({
+      page: req.query.page,
+      limit: req.query.limit
+    });
+
+    if (pagination) {
+      const pagedResult = await Notification.findAndCountAll({
+        where: { type: "admin_notice" },
+        include: [
+          {
+            association: "user",
+            attributes: ["id", "name", "email"]
+          }
+        ],
+        order: [["createdAt", "DESC"]],
+        limit: pagination.limit,
+        offset: pagination.offset
+      });
+
+      return res.json(
+        createPaginatedResponse(
+          pagedResult.rows.map(sanitizeAnnouncement),
+          pagedResult.count,
+          pagination
+        )
+      );
+    }
+
     const announcements = await Notification.findAll({
       where: { type: "admin_notice" },
       include: [
@@ -323,22 +367,7 @@ export class AdminController {
       limit: 100
     });
 
-    return res.json(
-      announcements.map((announcement) => {
-        const user = announcement.get("user") as User | undefined;
-
-        return {
-          id: String(announcement.id),
-          userId: announcement.userId,
-          userName: user?.name ?? "",
-          userEmail: user?.email ?? "",
-          title: announcement.title,
-          message: announcement.message,
-          isRead: announcement.isRead,
-          createdAt: announcement.createdAt
-        };
-      })
-    );
+    return res.json(announcements.map(sanitizeAnnouncement));
   }
 
   static async createAnnouncement(

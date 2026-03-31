@@ -1,5 +1,6 @@
 import type { Request, Response } from "express";
 import { Category } from "../models";
+import { paginateItems, parsePagination } from "../utils/pagination";
 
 type CategoryPayload = {
   slug?: string;
@@ -59,7 +60,17 @@ export class CategoryController {
       attributes: ["id", "slug", "label", "icon", "is_active", "createdAt", "updatedAt"]
     });
 
-    return res.json(categories.map(sanitizeCategory));
+    const sanitizedCategories = categories.map(sanitizeCategory);
+    const pagination = parsePagination({
+      page: req.query.page,
+      limit: req.query.limit
+    });
+
+    if (pagination) {
+      return res.json(paginateItems(sanitizedCategories, pagination));
+    }
+
+    return res.json(sanitizedCategories);
   }
 
   static async adminIndex(req: Request, res: Response) {
@@ -68,7 +79,17 @@ export class CategoryController {
       attributes: ["id", "slug", "label", "icon", "is_active", "createdAt", "updatedAt"]
     });
 
-    return res.json(categories.map(sanitizeCategory));
+    const sanitizedCategories = categories.map(sanitizeCategory);
+    const pagination = parsePagination({
+      page: req.query.page,
+      limit: req.query.limit
+    });
+
+    if (pagination) {
+      return res.json(paginateItems(sanitizedCategories, pagination));
+    }
+
+    return res.json(sanitizedCategories);
   }
 
   static async store(req: Request<unknown, unknown, CategoryPayload>, res: Response) {
