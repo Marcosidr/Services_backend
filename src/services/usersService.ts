@@ -4,6 +4,7 @@ import { isValidCpf, normalizeCpf } from "../utils/cpf";
 import { getEmailValidationError, normalizeEmail } from "../utils/email";
 import { getPasswordValidationError, hashPassword } from "../utils/password";
 import { getPhoneValidationError, normalizePhone } from "../utils/phone";
+import { fetchAddressByCep, validateCepWithApi } from "../utils/viacep";
 
 type UserRole = "user" | "professional" | "admin";
 
@@ -157,6 +158,14 @@ function assertValidPhone(phone: string | undefined) {
   }
 }
 
+function assertPhoneIsRequired(phone: string | undefined) {
+  if (!phone || !phone.trim()) {
+    throw new UsersServiceError(400, "Telefone e obrigatorio");
+  }
+
+  assertValidPhone(phone);
+}
+
 function assertValidPassword(password: string | undefined) {
   if (!password) return;
 
@@ -164,6 +173,52 @@ function assertValidPassword(password: string | undefined) {
   if (passwordValidationError) {
     throw new UsersServiceError(400, passwordValidationError);
   }
+}
+
+async function assertValidCepWithAddress(
+  cep: string | undefined,
+  endereco: string | undefined,
+  numero: string | undefined,
+  bairro: string | undefined,
+  cidade: string | undefined,
+  uf: string | undefined
+) {
+  if (!cep || !cep.trim()) {
+    return; // CEP opciona, se nao informado, nao valida
+  }
+
+  // Validar formato do CEP
+  assertValidCep(cep);
+
+  // Se CEP foi informado, buscar dados na API
+  const cepValidationError = await validateCepWithApi(cep);
+  if (cepValidationError) {
+    throw new UsersServiceError(400, cepValidationError);
+  }
+
+  // Se CEP é válido, campos de endereço se tornam obrigatórios
+  if (!endereco || !endereco.trim()) {
+    throw new UsersServiceError(400, "Endereco e obrigatorio quando CEP e informado");
+  }
+
+  if (!numero || !numero.trim()) {
+    throw new UsersServiceError(400, "Numero e obrigatorio quando CEP e informado");
+  }
+
+  if (!bairro || !bairro.trim()) {
+    throw new UsersServiceError(400, "Bairro e obrigatorio quando CEP e informado");
+  }
+
+  if (!cidade || !cidade.trim()) {
+    throw new UsersServiceError(400, "Cidade e obrigatoria quando CEP e informado");
+  }
+
+  if (!uf || !uf.trim()) {
+    throw new UsersServiceError(400, "UF e obrigatoria quando CEP e informado");
+  }
+
+  // Validar UF
+  assertValidUf(uf);
 }
 
 async function fetchUserWithRelations(userId: number) {
@@ -216,6 +271,11 @@ export async function createUser(payload: UserPayload) {
     throw new UsersServiceError(400, "name, email, cpf e password sao obrigatorios");
   }
 
+  // Telefone é OBRIGATÓRIO
+  if (!phone || !phone.trim()) {
+    throw new UsersServiceError(400, "Telefone e obrigatorio");
+  }
+
   const emailValidationError = getEmailValidationError(email);
   if (emailValidationError) {
     throw new UsersServiceError(400, emailValidationError);
@@ -228,9 +288,11 @@ export async function createUser(payload: UserPayload) {
     throw new UsersServiceError(400, "CPF invalido");
   }
 
-  assertValidCep(cep);
+  // Validação de CEP com integração de API e endereço
+  await assertValidCepWithAddress(cep, endereco, numero, bairro, cidade, uf);
+
   assertValidUf(uf);
-  assertValidPhone(phone);
+  assertPhoneIsRequired(phone);
   assertValidRole(role);
   if (role === "professional") {
     throw new UsersServiceError(
@@ -257,7 +319,7 @@ export async function createUser(payload: UserPayload) {
     name: name.trim(),
     email: normalizedEmail,
     cpf: normalizedCpf,
-    phone: typeof phone === "string" && phone.trim() ? normalizePhone(phone) : null,
+    phone: normalizePhone(phone),
     cep: typeof cep === "string" && cep.trim() ? normalizeCep(cep) : null,
     endereco: normalizeOptionalText(endereco),
     numero: normalizeOptionalText(numero),
@@ -304,8 +366,10 @@ export async function updateUserById(userId: number, payload: UserPayload) {
   const user = await findUserOrThrow(userId);
 
   assertValidPassword(password);
+  // Validação de telefone: se informado, a validação de obrigatoriedade só se aplica em createUser
   assertValidPhone(phone);
-  assertValidCep(cep);
+  // Validação de CEP com endereço
+  await assertValidCepWithAddress(cep, endereco, numero, bairro, cidade, uf);
   assertValidUf(uf);
   assertValidRole(role);
   if (role === "professional" && user.role !== "professional") {
