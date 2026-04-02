@@ -1,34 +1,10 @@
 import type { Request, Response } from "express";
 import { Professional, User, UserProfile } from "../models";
-import { isValidCep, normalizeCep } from "../utils/cep";
+import { UserValidator, type LoginInput, type RegisterInput, type UpdateProfileInput } from "../validators/UserValidator";
 import { isValidCpf, normalizeCpf } from "../utils/cpf";
-import { getEmailValidationError, normalizeEmail } from "../utils/email";
-import { getPasswordValidationError, hashPassword, verifyPassword } from "../utils/password";
-import { getPhoneValidationError, normalizePhone } from "../utils/phone";
+import { normalizeEmail } from "../utils/email";
+import { hashPassword, verifyPassword } from "../utils/password";
 import { generateToken } from "../utils/token";
-
-type RegisterBody = {
-  name?: string;
-  email?: string;
-  cpf?: string;
-  phone?: string;
-  cep?: string;
-  endereco?: string;
-  numero?: string;
-  complemento?: string;
-  bairro?: string;
-  cidade?: string;
-  uf?: string;
-  estado?: string;
-  photoUrl?: string;
-  bio?: string;
-  password?: string;
-};
-
-type LoginBody = {
-  email?: string;
-  password?: string;
-};
 
 type CpfLookupParams = {
   cpf?: string;
@@ -38,46 +14,21 @@ type UpdatePhotoBody = {
   photoUrl?: string;
 };
 
-type UpdateProfileBody = {
-  email?: string;
-  cpf?: string;
-  name?: string;
-  phone?: string;
-  cep?: string;
-  endereco?: string;
-  numero?: string;
-  complemento?: string;
-  bairro?: string;
-  cidade?: string;
-  uf?: string;
-  estado?: string;
-  photoUrl?: string;
-  bio?: string;
-  password?: string;
-  confirmPassword?: string;
-};
+/**
+ * Helpers - Formatação de resposta
+ */
 
-function normalizeOptionalText(value: string | undefined) {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
-
-function normalizePhotoUrl(value: unknown) {
+function normalizePhotoUrl(value: unknown): string {
   if (typeof value !== "string") return "";
   return value.trim();
 }
 
-function normalizeBio(value: unknown) {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
-
-function getUserPhoto(user: User) {
+function getUserPhoto(user: User): string {
   const professional = user.get("professional") as Professional | undefined;
   const profile = user.get("profile") as UserProfile | undefined;
-  return normalizePhotoUrl(professional?.photoUrl) || normalizePhotoUrl(profile?.photoUrl);
+  const profPhoto = professional?.photoUrl || "";
+  const profilePhoto = profile?.photoUrl || "";
+  return (typeof profPhoto === "string" ? profPhoto.trim() : "") || (typeof profilePhoto === "string" ? profilePhoto.trim() : "");
 }
 
 function getUserBio(user: User) {
@@ -168,147 +119,116 @@ export class AuthController {
     });
   }
 
-  static async register(req: Request, res: Response) {
-    const {
-      name,
-      email,
-      cpf,
-      phone,
-      cep,
-      endereco,
-      numero,
-      complemento,
-      bairro,
-      cidade,
-      uf,
-      estado,
-      password,
-      photoUrl,
-      bio
-    } =
-      req.body as RegisterBody;
-
-    if (!name || !email || !cpf || !phone || !cep || !endereco || !numero || !bairro || !cidade || !uf || !password) {
-      return res
-        .status(400)
-        .json({ message: "name, email, cpf, phone, cep, endereco, numero, bairro, cidade, uf e password sao obrigatorios" });
-    }
-
-    const passwordValidationError = getPasswordValidationError(password);
-    if (passwordValidationError) {
-      return res.status(400).json({ message: passwordValidationError });
-    }
-
-    const emailValidationError = getEmailValidationError(email);
-    if (emailValidationError) {
-      return res.status(400).json({ message: emailValidationError });
-    }
-
-    const phoneValidationError = getPhoneValidationError(phone);
-    if (phoneValidationError) {
-      return res.status(400).json({ message: phoneValidationError });
-    }
-
-    const normalizedCpf = normalizeCpf(cpf);
-    if (!isValidCpf(normalizedCpf)) {
-      return res.status(400).json({ message: "CPF invalido" });
-    }
-
-    const normalizedCep = normalizeCep(cep);
-    if (!isValidCep(normalizedCep)) {
-      return res.status(400).json({ message: "CEP invalido" });
-    }
-
-    if (!/^[a-zA-Z]{2}$/.test(uf.trim())) {
-      return res.status(400).json({ message: "UF invalida" });
-    }
-
-    const normalizedEmail = normalizeEmail(email);
-    const [cpfExists, exists] = await Promise.all([
-      User.findOne({ where: { cpf: normalizedCpf } }),
-      User.findOne({
-        where: {
-          email: normalizedEmail
-        }
-      })
+  /**
+   * Verifica se CPF e Email já existem
+   */
+  private static async checkDuplicates(cpf: string, email: string) {
+    const [cpfExists, emailExists] = await Promise.all([
+      User.findOne({ where: { cpf } }),
+      User.findOne({ where: { email } })
     ]);
 
     if (cpfExists) {
-      return res.status(409).json({ message: "CPF ja cadastrado" });
+      return { field: "cpf", message: "CPF ja cadastrado" };
+    }
+    if (emailExists) {
+      return { field: "email", message: "Email ja cadastrado" };
     }
 
-    if (exists) {
-      return res.status(409).json({ message: "Email ja cadastrado" });
-    }
+    return null;
+  }
 
+  /**
+   * Cria usuário e seu perfil no banco
+   */
+  private static async createUserAndProfile(registerData: ReturnType<typeof UserValidator.normalizeRegisterData>) {
     const user = await User.create({
-      name: name.trim(),
-      email: normalizedEmail,
-      cpf: normalizedCpf,
-      phone: normalizePhone(phone),
-      cep: normalizedCep,
-      endereco: endereco.trim(),
-      numero: numero.trim(),
-      complemento: normalizeOptionalText(complemento),
-      bairro: bairro.trim(),
-      cidade: cidade.trim(),
-      uf: uf.trim().toUpperCase(),
-      estado: normalizeOptionalText(estado),
-      password: hashPassword(password),
+      name: registerData.name,
+      email: registerData.email,
+      cpf: registerData.cpf,
+      phone: registerData.phone,
+      cep: registerData.cep,
+      endereco: registerData.endereco,
+      numero: registerData.numero,
+      complemento: registerData.complemento,
+      bairro: registerData.bairro,
+      cidade: registerData.cidade,
+      uf: registerData.uf,
+      estado: registerData.estado,
+      password: registerData.password,
       role: "user"
     });
 
-    const normalizedPhoto = normalizePhotoUrl(photoUrl);
-    const normalizedBio = normalizeBio(bio);
-    if (normalizedPhoto || normalizedBio) {
+    if (registerData.photoUrl || registerData.bio) {
       await UserProfile.create({
         userId: user.id,
-        photoUrl: normalizedPhoto || null,
-        bio: normalizedBio
+        photoUrl: registerData.photoUrl || null,
+        bio: registerData.bio
       });
     }
 
-    const savedUser = await loadUserWithProfile(user.id);
+    return user.id;
+  }
+
+  /**
+   * Registro de novo usuário
+   */
+  static async register(req: Request, res: Response) {
+    const input = req.body as RegisterInput;
+
+    // Validação centralizada
+    const validationError = UserValidator.validateRegisterInput(input);
+    if (validationError) {
+      return res.status(400).json({ message: validationError.message });
+    }
+
+    // Verifica duplicatas
+    const normalizedInput = {
+      cpf: normalizeCpf(input.cpf || ""),
+      email: normalizeEmail(input.email || "")
+    };
+
+    const duplicateError = await AuthController.checkDuplicates(normalizedInput.cpf, normalizedInput.email);
+    if (duplicateError) {
+      return res.status(409).json({ message: duplicateError.message });
+    }
+
+    // Cria usuário
+    const registerData = UserValidator.normalizeRegisterData(input);
+    const userId = await AuthController.createUserAndProfile(registerData);
+
+    // Carrega usuário com relacionamentos
+    const savedUser = await loadUserWithProfile(userId);
 
     return res.status(201).json({
       message: "Conta criada com sucesso",
       token: generateToken({
-        sub: String(user.id),
-        role: user.role,
-        email: user.email
+        sub: String(userId),
+        role: "user",
+        email: normalizedInput.email
       }),
-      user: publicUser(savedUser ?? user)
+      user: publicUser(savedUser || { id: userId } as User)
     });
   }
 
+  /**
+   * Login do usuário
+   */
   static async login(req: Request, res: Response) {
-    const { email, password } = req.body as LoginBody;
+    const input = req.body as LoginInput;
 
-    if (!email || !password) {
-      return res.status(400).json({ message: "email e password sao obrigatorios" });
+    // Validação centralizada
+    const validationError = UserValidator.validateLoginInput(input);
+    if (validationError) {
+      return res.status(400).json({ message: validationError.message });
     }
 
-    const emailValidationError = getEmailValidationError(email);
-    if (emailValidationError) {
-      return res.status(400).json({ message: emailValidationError });
-    }
+    const normalizedEmail = normalizeEmail(input.email || "");
+    const user = await AuthController.loadUserByEmail(normalizedEmail);
 
-    const normalizedEmail = normalizeEmail(email);
-    const user = await User.findOne({
-      where: { email: normalizedEmail },
-      include: [
-        {
-          association: "professional",
-          attributes: ["photoUrl"]
-        },
-        {
-          association: "profile",
-          attributes: ["photoUrl", "bio"]
-        }
-      ]
-    });
-
-    if (!user?.password || !verifyPassword(password, user.password)) {
+    // Verifica senha
+    const passwordValid = user?.password && verifyPassword(input.password || "", user.password);
+    if (!user || !passwordValid) {
       return res.status(401).json({ message: "Email ou senha invalidos" });
     }
 
@@ -320,6 +240,25 @@ export class AuthController {
         email: user.email
       }),
       user: publicUser(user)
+    });
+  }
+
+  /**
+   * Helper: carrega usuário por email com relacionamentos
+   */
+  private static async loadUserByEmail(email: string) {
+    return User.findOne({
+      where: { email: normalizeEmail(email) },
+      include: [
+        {
+          association: "professional",
+          attributes: ["photoUrl"]
+        },
+        {
+          association: "profile",
+          attributes: ["photoUrl", "bio"]
+        }
+      ]
     });
   }
 
@@ -356,7 +295,168 @@ export class AuthController {
     });
   }
 
-  static async updateMyProfile(req: Request<unknown, unknown, UpdateProfileBody>, res: Response) {
+  /**
+   * Valida que email não está sendo alterado
+   */
+  private static validateEmailNotChanged(providedEmail: string | undefined, userEmail: string): string | null {
+    if (typeof providedEmail === "undefined") return null;
+
+    const normalized = normalizeEmail(providedEmail || "");
+    if (!normalized || normalized !== userEmail) {
+      return "Nao e permitido alterar email";
+    }
+    return null;
+  }
+
+  /**
+   * Valida que CPF não está sendo alterado
+   */
+  private static validateCpfNotChanged(providedCpf: string | undefined, userCpf: string | null): string | null {
+    if (typeof providedCpf === "undefined") return null;
+
+    const normalized = normalizeCpf(providedCpf || "");
+    const cpfValid = isValidCpf(normalized);
+
+    if (!normalized || !cpfValid) {
+      return "CPF invalido";
+    }
+    if (normalized !== userCpf) {
+      return "Nao e permitido alterar CPF";
+    }
+    return null;
+  }
+
+  /**
+   * Valida dados de senha para atualização
+   */
+  private static validatePasswordUpdate(password: string | undefined, confirmPassword: string | undefined): string | null {
+    const hasPassword = typeof password !== "undefined";
+    const hasConfirmPassword = typeof confirmPassword !== "undefined";
+    const normPassword = typeof password === "string" ? password.trim() : "";
+    const normConfirmPassword = typeof confirmPassword === "string" ? confirmPassword.trim() : "";
+
+    if (hasConfirmPassword && !hasPassword && normConfirmPassword) {
+      return "Informe a nova senha para confirmar";
+    }
+
+    if (hasPassword && normPassword) {
+      if (!normConfirmPassword) {
+        return "Confirme a nova senha";
+      }
+      if (normPassword !== normConfirmPassword) {
+        return "As senhas nao coincidem";
+      }
+
+      const error = UserValidator.validatePassword(normPassword);
+      if (error) return error.message;
+    } else if (hasConfirmPassword && normConfirmPassword) {
+      return "Informe a nova senha para confirmar";
+    }
+
+    return null;
+  }
+
+  /**
+   * Valida campos de endereço opcionais
+   */
+  private static validateAddressFields(input: UpdateProfileInput): string | null {
+    if (typeof input.phone === "string" && input.phone.trim()) {
+      const error = UserValidator.validatePhone(input.phone);
+      if (error) return error.message;
+    }
+
+    if (typeof input.cep === "string" && input.cep.trim()) {
+      const error = UserValidator.validateCep(input.cep);
+      if (error) return error.message;
+    }
+
+    if (typeof input.uf === "string" && input.uf.trim()) {
+      const error = UserValidator.validateUf(input.uf);
+      if (error) return error.message;
+    }
+
+    return null;
+  }
+
+  /**
+   * Constrói payload de atualização do usuário
+   */
+  private static buildUserUpdatePayload(input: UpdateProfileInput, password: string | null) {
+    const updates: Record<string, any> = {};
+
+    if (typeof input.name === "string" && input.name.trim()) {
+      updates.name = input.name.trim();
+    }
+
+    if (typeof input.phone !== "undefined") {
+      updates.phone = typeof input.phone === "string" && input.phone.trim() ? input.phone.trim() : null;
+    }
+
+    if (typeof input.cep !== "undefined") {
+      updates.cep = typeof input.cep === "string" && input.cep.trim() ? input.cep.trim() : null;
+    }
+
+    if (typeof input.endereco !== "undefined") {
+      updates.endereco = typeof input.endereco === "string" ? input.endereco.trim() || null : null;
+    }
+
+    if (typeof input.numero !== "undefined") {
+      updates.numero = typeof input.numero === "string" ? input.numero.trim() || null : null;
+    }
+
+    if (typeof input.complemento !== "undefined") {
+      updates.complemento = typeof input.complemento === "string" ? input.complemento.trim() || null : null;
+    }
+
+    if (typeof input.bairro !== "undefined") {
+      updates.bairro = typeof input.bairro === "string" ? input.bairro.trim() || null : null;
+    }
+
+    if (typeof input.cidade !== "undefined") {
+      updates.cidade = typeof input.cidade === "string" ? input.cidade.trim() || null : null;
+    }
+
+    if (typeof input.uf !== "undefined") {
+      updates.uf = typeof input.uf === "string" && input.uf.trim() ? input.uf.trim().toUpperCase() : null;
+    }
+
+    if (typeof input.estado !== "undefined") {
+      updates.estado = typeof input.estado === "string" ? input.estado.trim() || null : null;
+    }
+
+    if (password) {
+      updates.password = password;
+    }
+
+    return updates;
+  }
+
+  /**
+   * Atualiza ou cria profile do usuário com foto e bio
+   */
+  private static async updateUserProfile(userId: number, input: UpdateProfileInput) {
+    const shouldUpdateProfile = typeof input.photoUrl !== "undefined" || typeof input.bio !== "undefined";
+    if (!shouldUpdateProfile) return;
+
+    const existingProfile = await UserProfile.findOne({ where: { userId } });
+
+    const photoUrl = typeof input.photoUrl !== "undefined" ? (typeof input.photoUrl === "string" ? input.photoUrl.trim() : "") : existingProfile?.photoUrl ?? "";
+    const bio = typeof input.bio !== "undefined" ? (typeof input.bio === "string" ? input.bio.trim() : "") : existingProfile?.bio ?? "";
+
+    const nextPhotoUrl = photoUrl || null;
+    const nextBio = bio || null;
+
+    if (existingProfile) {
+      await existingProfile.update({ photoUrl: nextPhotoUrl, bio: nextBio });
+    } else if (nextPhotoUrl || nextBio) {
+      await UserProfile.create({ userId, photoUrl: nextPhotoUrl, bio: nextBio });
+    }
+  }
+
+  /**
+   * Atualiza perfil do usuário autenticado
+   */
+  static async updateMyProfile(req: Request, res: Response) {
     const authenticatedUserId = req.user?.id ?? null;
     if (!authenticatedUserId) {
       return res.status(401).json({ message: "Token de autenticacao invalido ou ausente" });
@@ -367,139 +467,33 @@ export class AuthController {
       return res.status(404).json({ message: "Usuario nao encontrado" });
     }
 
-    const {
-      email,
-      cpf,
-      name,
-      phone,
-      cep,
-      endereco,
-      numero,
-      complemento,
-      bairro,
-      cidade,
-      uf,
-      estado,
-      photoUrl,
-      bio,
-      password,
-      confirmPassword
-    } = req.body;
+    const input = req.body as UpdateProfileInput;
 
-    if (typeof email !== "undefined") {
-      const normalizedIncomingEmail = typeof email === "string" ? normalizeEmail(email) : "";
-      if (!normalizedIncomingEmail || normalizedIncomingEmail !== user.email) {
-        return res.status(400).json({ message: "Nao e permitido alterar email" });
-      }
-    }
+    // Valida email (não pode mudar)
+    const emailError = AuthController.validateEmailNotChanged(input.email, user.email);
+    if (emailError) return res.status(400).json({ message: emailError });
 
-    if (typeof cpf !== "undefined") {
-      const normalizedIncomingCpf = typeof cpf === "string" ? normalizeCpf(cpf) : "";
-      if (!normalizedIncomingCpf || !isValidCpf(normalizedIncomingCpf)) {
-        return res.status(400).json({ message: "CPF invalido" });
-      }
+    // Valida CPF (não pode mudar)
+    const cpfError = AuthController.validateCpfNotChanged(input.cpf, user.cpf);
+    if (cpfError) return res.status(400).json({ message: cpfError });
 
-      if (normalizedIncomingCpf !== user.cpf) {
-        return res.status(400).json({ message: "Nao e permitido alterar CPF" });
-      }
-    }
+    // Valida senha se informada
+    const passwordError = AuthController.validatePasswordUpdate(input.password, input.confirmPassword);
+    if (passwordError) return res.status(400).json({ message: passwordError });
 
-    const hasPasswordField = typeof password !== "undefined";
-    const hasConfirmPasswordField = typeof confirmPassword !== "undefined";
-    const normalizedPassword = typeof password === "string" ? password.trim() : "";
-    const normalizedConfirmPassword =
-      typeof confirmPassword === "string" ? confirmPassword.trim() : "";
+    // Valida campos de endereço
+    const addressError = AuthController.validateAddressFields(input);
+    if (addressError) return res.status(400).json({ message: addressError });
 
-    if (hasConfirmPasswordField && !hasPasswordField && normalizedConfirmPassword) {
-      return res.status(400).json({ message: "Informe a nova senha para confirmar" });
-    }
+    // Constrói e executa update
+    const normalizedPassword = typeof input.password === "string" ? input.password.trim() : "";
+    const hashedPassword = normalizedPassword ? hashPassword(normalizedPassword) : null;
+    const updatePayload = AuthController.buildUserUpdatePayload(input, hashedPassword);
 
-    if (hasPasswordField && normalizedPassword) {
-      if (!normalizedConfirmPassword) {
-        return res.status(400).json({ message: "Confirme a nova senha" });
-      }
+    await user.update(updatePayload);
+    await AuthController.updateUserProfile(authenticatedUserId, input);
 
-      if (normalizedPassword !== normalizedConfirmPassword) {
-        return res.status(400).json({ message: "As senhas nao coincidem" });
-      }
-
-      const passwordValidationError = getPasswordValidationError(normalizedPassword);
-      if (passwordValidationError) {
-        return res.status(400).json({ message: passwordValidationError });
-      }
-    } else if (hasConfirmPasswordField && normalizedConfirmPassword) {
-      return res.status(400).json({ message: "Informe a nova senha para confirmar" });
-    }
-
-    if (typeof phone === "string" && phone.trim()) {
-      const phoneValidationError = getPhoneValidationError(phone);
-      if (phoneValidationError) {
-        return res.status(400).json({ message: phoneValidationError });
-      }
-    }
-
-    if (typeof cep === "string" && cep.trim()) {
-      const normalizedCep = normalizeCep(cep);
-      if (!isValidCep(normalizedCep)) {
-        return res.status(400).json({ message: "CEP invalido" });
-      }
-    }
-
-    if (typeof uf === "string" && uf.trim() && !/^[a-zA-Z]{2}$/.test(uf.trim())) {
-      return res.status(400).json({ message: "UF invalida" });
-    }
-
-    await user.update({
-      ...(typeof name === "string" && name.trim() ? { name: name.trim() } : {}),
-      ...(typeof phone !== "undefined"
-        ? {
-            phone: typeof phone === "string" && phone.trim() ? normalizePhone(phone) : null
-          }
-        : {}),
-      ...(typeof cep !== "undefined"
-        ? {
-            cep: typeof cep === "string" && cep.trim() ? normalizeCep(cep) : null
-          }
-        : {}),
-      ...(typeof endereco !== "undefined" ? { endereco: normalizeOptionalText(endereco) } : {}),
-      ...(typeof numero !== "undefined" ? { numero: normalizeOptionalText(numero) } : {}),
-      ...(typeof complemento !== "undefined" ? { complemento: normalizeOptionalText(complemento) } : {}),
-      ...(typeof bairro !== "undefined" ? { bairro: normalizeOptionalText(bairro) } : {}),
-      ...(typeof cidade !== "undefined" ? { cidade: normalizeOptionalText(cidade) } : {}),
-      ...(typeof uf !== "undefined"
-        ? {
-            uf: typeof uf === "string" && uf.trim() ? uf.trim().toUpperCase() : null
-          }
-        : {}),
-      ...(typeof estado !== "undefined" ? { estado: normalizeOptionalText(estado) } : {}),
-      ...(normalizedPassword ? { password: hashPassword(normalizedPassword) } : {})
-    });
-
-    if (typeof photoUrl !== "undefined" || typeof bio !== "undefined") {
-      const existingProfile = await UserProfile.findOne({
-        where: { userId: authenticatedUserId }
-      });
-
-      const nextPhotoUrl =
-        typeof photoUrl !== "undefined"
-          ? normalizePhotoUrl(photoUrl) || null
-          : existingProfile?.photoUrl ?? null;
-      const nextBio = typeof bio !== "undefined" ? normalizeBio(bio) : existingProfile?.bio ?? null;
-
-      if (existingProfile) {
-        await existingProfile.update({
-          photoUrl: nextPhotoUrl,
-          bio: nextBio
-        });
-      } else if (nextPhotoUrl || nextBio) {
-        await UserProfile.create({
-          userId: authenticatedUserId,
-          photoUrl: nextPhotoUrl,
-          bio: nextBio
-        });
-      }
-    }
-
+    // Carrega e retorna usuário atualizado
     const updatedUser = await loadUserWithProfile(authenticatedUserId);
     if (!updatedUser) {
       return res.status(404).json({ message: "Usuario nao encontrado" });

@@ -10,102 +10,12 @@ import {
 } from "../models";
 import { createNotification } from "../services/notificationService";
 import { createPaginatedResponse, parsePagination } from "../utils/pagination";
-
-type AdminUserStatus = "ativo" | "bloqueado";
-type ProfessionalStatus = "online" | "offline";
-type AdminAnnouncementPayload = {
-  userId?: number | string;
-  title?: string;
-  message?: string;
-};
-
-function parsePositiveInteger(value: unknown) {
-  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return value;
-  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
-    const parsed = Number(value.trim());
-    if (Number.isSafeInteger(parsed) && parsed > 0) return parsed;
-  }
-  return null;
-}
-
-function parseProfessionalId(value: unknown) {
-  if (Array.isArray(value)) return null;
-  if (typeof value !== "string" || !/^\d+$/.test(value)) return null;
-
-  const id = Number(value);
-  if (!Number.isSafeInteger(id) || id <= 0) return null;
-
-  return id;
-}
-
-function formatDate(value: Date) {
-  return value.toLocaleDateString("pt-BR");
-}
-
-function getCurrentMonthStart() {
-  const now = new Date();
-  return new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
-}
-
-function getUserCategories(user: User) {
-  return (user.get("categories") as Category[] | undefined) ?? [];
-}
-
-function getUserProfessional(user: User) {
-  return (user.get("professional") as Professional | undefined) ?? null;
-}
-
-function normalizePhotoUrl(value: unknown) {
-  if (typeof value !== "string") return "";
-  return value.trim();
-}
-
-function getUserPhoto(user: User) {
-  const professional = getUserProfessional(user);
-  const profile = user.get("profile") as UserProfile | undefined;
-  return normalizePhotoUrl(professional?.photoUrl) || normalizePhotoUrl(profile?.photoUrl);
-}
-
-function sanitizeAnnouncement(announcement: Notification) {
-  const user = announcement.get("user") as User | undefined;
-
-  return {
-    id: String(announcement.id),
-    userId: announcement.userId,
-    userName: user?.name ?? "",
-    userEmail: user?.email ?? "",
-    title: announcement.title,
-    message: announcement.message,
-    isRead: announcement.isRead,
-    createdAt: announcement.createdAt
-  };
-}
-
-function buildCategoryDistribution(approvedUsers: User[]) {
-  const categoryCount = new Map<string, number>();
-
-  for (const user of approvedUsers) {
-    const categories = getUserCategories(user);
-    for (const category of categories) {
-      const currentCount = categoryCount.get(category.label) ?? 0;
-      categoryCount.set(category.label, currentCount + 1);
-    }
-  }
-
-  const total = Array.from(categoryCount.values()).reduce((sum, current) => sum + current, 0);
-  if (total === 0) return [];
-
-  return Array.from(categoryCount.entries())
-    .sort((a, b) => b[1] - a[1])
-    .map(([label, count]) => ({
-      label,
-      value: Math.round((count / total) * 100)
-    }));
-}
+import { AdminValidator, type AdminUserStatus, type ProfessionalStatus, type AdminAnnouncementPayload } from "../validators/AdminValidator";
+import { AdminFormatter } from "../formatters/AdminFormatter";
 
 export class AdminController {
   static async dashboard(req: Request, res: Response) {
-    const monthStart = getCurrentMonthStart();
+    const monthStart = AdminFormatter.getCurrentMonthStart();
 
     const users = await User.findAll({
       order: [["createdAt", "DESC"]],
@@ -131,7 +41,7 @@ export class AdminController {
       id: String(user.id),
       name: user.name,
       email: user.email,
-      joined: formatDate(user.createdAt),
+      joined: AdminFormatter.formatDate(user.createdAt),
       orders: 0,
       status: "ativo" as AdminUserStatus
     }));
@@ -139,7 +49,7 @@ export class AdminController {
     const professionalsWithStatus = users
       .map((user) => ({
         user,
-        professional: getUserProfessional(user)
+        professional: AdminFormatter.getUserProfessional(user)
       }))
       .filter((item) => Boolean(item.professional));
 
@@ -173,13 +83,13 @@ export class AdminController {
       .filter((item) => item.professional?.approvalStatus === "pending")
       .map((item) => {
         const professional = item.professional!;
-        const categories = getUserCategories(item.user);
+        const categories = AdminFormatter.getUserCategories(item.user);
 
         return {
           id: String(professional.id),
           name: item.user.name,
           category: categories.map((category) => category.label).join(" / ") || "Sem categoria",
-          date: formatDate(professional.createdAt),
+          date: AdminFormatter.formatDate(professional.createdAt),
           docs: Boolean(item.user.cpf)
         };
       });
@@ -188,7 +98,7 @@ export class AdminController {
       .filter((item) => item.professional?.approvalStatus === "approved")
       .map((item) => {
         const professional = item.professional!;
-        const categories = getUserCategories(item.user);
+        const categories = AdminFormatter.getUserCategories(item.user);
         const reviewTotals = reviewTotalsByProfessional.get(item.user.id);
         const reviewCount = reviewTotals?.count ?? 0;
         const averageRating =
@@ -197,7 +107,7 @@ export class AdminController {
         return {
           id: String(professional.id),
           name: item.user.name,
-          photo: getUserPhoto(item.user),
+          photo: AdminFormatter.getUserPhoto(item.user),
           categoryLabel: categories.map((category) => category.label).join(" / ") || "Sem categoria",
           rating: Number(averageRating.toFixed(1)),
           completedJobs: reviewCount,
@@ -229,7 +139,7 @@ export class AdminController {
       users: usersPayload,
       professionals: professionalsPayload,
       payments: [],
-      categoryDistribution: buildCategoryDistribution(approvedUsers),
+      categoryDistribution: AdminFormatter.buildCategoryDistribution(approvedUsers),
       monthlyMetrics: [
         {
           label: "Novos usuarios",
@@ -254,7 +164,7 @@ export class AdminController {
   }
 
   static async approveProfessional(req: Request, res: Response) {
-    const professionalId = parseProfessionalId(req.params.id);
+    const professionalId = AdminValidator.parseProfessionalId(req.params.id);
     if (!professionalId) {
       return res.status(400).json({ message: "id invalido" });
     }
@@ -290,7 +200,7 @@ export class AdminController {
   }
 
   static async rejectProfessional(req: Request, res: Response) {
-    const professionalId = parseProfessionalId(req.params.id);
+    const professionalId = AdminValidator.parseProfessionalId(req.params.id);
     if (!professionalId) {
       return res.status(400).json({ message: "id invalido" });
     }
@@ -348,7 +258,7 @@ export class AdminController {
 
       return res.json(
         createPaginatedResponse(
-          pagedResult.rows.map(sanitizeAnnouncement),
+          pagedResult.rows.map((announcement) => AdminFormatter.formatAnnouncement(announcement)),
           pagedResult.count,
           pagination
         )
@@ -367,7 +277,7 @@ export class AdminController {
       limit: 100
     });
 
-    return res.json(announcements.map(sanitizeAnnouncement));
+    return res.json(announcements.map((announcement) => AdminFormatter.formatAnnouncement(announcement)));
   }
 
   static async createAnnouncement(
@@ -379,7 +289,7 @@ export class AdminController {
       return res.status(401).json({ message: "Token de autenticacao invalido ou ausente" });
     }
 
-    const parsedUserId = parsePositiveInteger(req.body.userId);
+    const parsedUserId = AdminValidator.parsePositiveInteger(req.body.userId);
     if (!parsedUserId) {
       return res.status(400).json({ message: "userId invalido" });
     }
@@ -428,7 +338,7 @@ export class AdminController {
     req: Request<{ id: string }, unknown, AdminAnnouncementPayload>,
     res: Response
   ) {
-    const announcementId = parsePositiveInteger(req.params.id);
+    const announcementId = AdminValidator.parsePositiveInteger(req.params.id);
     if (!announcementId) {
       return res.status(400).json({ message: "id invalido" });
     }
@@ -441,7 +351,7 @@ export class AdminController {
     const nextUserId =
       typeof req.body.userId === "undefined"
         ? announcement.userId
-        : parsePositiveInteger(req.body.userId);
+        : AdminValidator.parsePositiveInteger(req.body.userId);
     if (!nextUserId) {
       return res.status(400).json({ message: "userId invalido" });
     }
@@ -489,7 +399,7 @@ export class AdminController {
   }
 
   static async deleteAnnouncement(req: Request<{ id: string }>, res: Response) {
-    const announcementId = parsePositiveInteger(req.params.id);
+    const announcementId = AdminValidator.parsePositiveInteger(req.params.id);
     if (!announcementId) {
       return res.status(400).json({ message: "id invalido" });
     }

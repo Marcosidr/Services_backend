@@ -4,63 +4,8 @@ import { Conversation, Message, Professional, User, UserProfile } from "../model
 import { findOrCreateConversation } from "../services/conversationService";
 import { createNotification } from "../services/notificationService";
 import { canUsersChat } from "../services/orderService";
-
-type MessageBody = {
-  recipientId?: number | string;
-  text?: string;
-};
-
-type MessageQuery = {
-  withUserId?: string;
-  limit?: string;
-};
-
-type ConversationQuery = {
-  limit?: string;
-};
-
-function parsePositiveInteger(value: unknown) {
-  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return value;
-  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
-    const parsed = Number(value.trim());
-    if (Number.isSafeInteger(parsed) && parsed > 0) return parsed;
-  }
-  return null;
-}
-
-function parseLimit(value: unknown, fallback: number) {
-  const parsed = parsePositiveInteger(value);
-  if (!parsed) return fallback;
-  return Math.min(parsed, 200);
-}
-
-function mapMessageForResponse(currentUserId: number, message: Message) {
-  return {
-    id: String(message.id),
-    conversationId: String(message.conversationId),
-    senderId: message.senderId,
-    receiverId: message.receiverId,
-    sender: message.senderId === currentUserId ? "user" : "professional",
-    text: message.message,
-    read: message.isRead,
-    time: message.createdAt.toLocaleTimeString("pt-BR", {
-      hour: "2-digit",
-      minute: "2-digit"
-    }),
-    createdAt: message.createdAt
-  };
-}
-
-function normalizePhotoUrl(value: unknown) {
-  if (typeof value !== "string") return "";
-  return value.trim();
-}
-
-function getUserPhoto(user: User) {
-  const professional = user.get("professional") as Professional | undefined;
-  const profile = user.get("profile") as UserProfile | undefined;
-  return normalizePhotoUrl(professional?.photoUrl) || normalizePhotoUrl(profile?.photoUrl);
-}
+import { MessageValidator, type MessageBody, type MessageQuery, type ConversationQuery } from "../validators/MessageValidator";
+import { MessageFormatter } from "../formatters/MessageFormatter";
 
 export class MessagesController {
   static async conversations(
@@ -72,7 +17,7 @@ export class MessagesController {
       return res.status(401).json({ message: "Token de autenticacao invalido ou ausente" });
     }
 
-    const limit = parseLimit(req.query.limit, 30);
+    const limit = MessageValidator.parseLimit(req.query.limit, 30);
     const scanLimit = Math.max(limit * 40, 400);
 
     const messages = await Message.findAll({
@@ -146,7 +91,7 @@ export class MessagesController {
           conversationId: String(message.conversationId),
           otherUserId: otherUser.id,
           otherUserName: otherUser.name,
-          otherUserPhoto: getUserPhoto(otherUser),
+          otherUserPhoto: MessageFormatter.getUserPhoto(otherUser),
           lastMessage: {
             id: String(message.id),
             senderId: message.senderId,
@@ -179,8 +124,8 @@ export class MessagesController {
       return res.status(401).json({ message: "Token de autenticacao invalido ou ausente" });
     }
 
-    const withUserId = parsePositiveInteger(req.query.withUserId);
-    const limit = parseLimit(req.query.limit, 80);
+    const withUserId = MessageValidator.parsePositiveInteger(req.query.withUserId);
+    const limit = MessageValidator.parseLimit(req.query.limit, 80);
 
     const where = withUserId
       ? {
@@ -213,7 +158,7 @@ export class MessagesController {
     });
 
     return res.json({
-      items: messages.map((message) => mapMessageForResponse(authenticatedUserId, message)),
+      items: messages.map((message) => MessageFormatter.mapMessageForResponse(authenticatedUserId, message)),
       unreadCount
     });
   }
@@ -225,7 +170,7 @@ export class MessagesController {
     }
 
     const { recipientId, text } = req.body;
-    const parsedRecipientId = parsePositiveInteger(recipientId);
+    const parsedRecipientId = MessageValidator.parsePositiveInteger(recipientId);
     if (!parsedRecipientId) {
       return res.status(400).json({ message: "recipientId invalido" });
     }
@@ -284,7 +229,7 @@ export class MessagesController {
       }
     });
 
-    return res.status(201).json(mapMessageForResponse(authenticatedUserId, savedMessage));
+    return res.status(201).json(MessageFormatter.mapMessageForResponse(authenticatedUserId, savedMessage));
   }
 
   static async update(req: Request<{ id: string }, unknown, { text?: string }>, res: Response) {
@@ -293,7 +238,7 @@ export class MessagesController {
       return res.status(401).json({ message: "Token de autenticacao invalido ou ausente" });
     }
 
-    const messageId = parsePositiveInteger(req.params.id);
+    const messageId = MessageValidator.parsePositiveInteger(req.params.id);
     if (!messageId) return res.status(400).json({ message: "id invalido" });
 
     const { text } = req.body;
@@ -314,7 +259,7 @@ export class MessagesController {
       message: text.trim()
     });
 
-    return res.json(mapMessageForResponse(authenticatedUserId, message));
+    return res.json(MessageFormatter.mapMessageForResponse(authenticatedUserId, message));
   }
 
   static async markAsRead(req: Request<{ id: string }>, res: Response) {
@@ -323,7 +268,7 @@ export class MessagesController {
       return res.status(401).json({ message: "Token de autenticacao invalido ou ausente" });
     }
 
-    const messageId = parsePositiveInteger(req.params.id);
+    const messageId = MessageValidator.parsePositiveInteger(req.params.id);
     if (!messageId) return res.status(400).json({ message: "id invalido" });
 
     const message = await Message.findByPk(messageId);
@@ -339,7 +284,7 @@ export class MessagesController {
       await message.update({ isRead: true });
     }
 
-    return res.json(mapMessageForResponse(authenticatedUserId, message));
+    return res.json(MessageFormatter.mapMessageForResponse(authenticatedUserId, message));
   }
 
   static async destroy(req: Request<{ id: string }>, res: Response) {
@@ -348,7 +293,7 @@ export class MessagesController {
       return res.status(401).json({ message: "Token de autenticacao invalido ou ausente" });
     }
 
-    const messageId = parsePositiveInteger(req.params.id);
+    const messageId = MessageValidator.parsePositiveInteger(req.params.id);
     if (!messageId) return res.status(400).json({ message: "id invalido" });
 
     const message = await Message.findByPk(messageId);
@@ -370,7 +315,7 @@ export class MessagesController {
       return res.status(401).json({ message: "Token de autenticacao invalido ou ausente" });
     }
 
-    const conversationId = parsePositiveInteger(req.params.id);
+    const conversationId = MessageValidator.parsePositiveInteger(req.params.id);
     if (!conversationId) return res.status(400).json({ message: "id invalido" });
 
     const conversation = await Conversation.findByPk(conversationId);
@@ -398,7 +343,7 @@ export class MessagesController {
       return res.status(401).json({ message: "Token de autenticacao invalido ou ausente" });
     }
 
-    const otherUserId = parsePositiveInteger(req.params.userId);
+    const otherUserId = MessageValidator.parsePositiveInteger(req.params.userId);
     if (!otherUserId) return res.status(400).json({ message: "userId invalido" });
     if (otherUserId === authenticatedUserId) {
       return res.status(400).json({ message: "Nao e permitido apagar conversa com voce mesmo" });

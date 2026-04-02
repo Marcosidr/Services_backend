@@ -1,38 +1,7 @@
 import type { Request, Response } from "express";
 import { Notification } from "../models";
-
-type NotificationQuery = {
-  onlyUnread?: string;
-  limit?: string;
-};
-
-function parsePositiveInteger(value: unknown) {
-  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return value;
-  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
-    const parsed = Number(value.trim());
-    if (Number.isSafeInteger(parsed) && parsed > 0) return parsed;
-  }
-  return null;
-}
-
-function parseLimit(value: unknown, fallback: number) {
-  const parsed = parsePositiveInteger(value);
-  if (!parsed) return fallback;
-  return Math.min(parsed, 100);
-}
-
-function toNotificationPayload(notification: Notification) {
-  return {
-    id: String(notification.id),
-    userId: notification.userId,
-    type: notification.type,
-    title: notification.title,
-    message: notification.message,
-    isRead: notification.isRead,
-    metadata: notification.metadata,
-    createdAt: notification.createdAt
-  };
-}
+import { NotificationValidator, type NotificationQuery } from "../validators/NotificationValidator";
+import { NotificationFormatter } from "../formatters/NotificationFormatter";
 
 export class NotificationsController {
   static async index(req: Request<unknown, unknown, unknown, NotificationQuery>, res: Response) {
@@ -42,7 +11,7 @@ export class NotificationsController {
     }
 
     const onlyUnread = req.query.onlyUnread === "true";
-    const limit = parseLimit(req.query.limit, 10);
+    const limit = NotificationValidator.parseLimit(req.query.limit, 10);
 
     const [notifications, unreadCount] = await Promise.all([
       Notification.findAll({
@@ -62,7 +31,7 @@ export class NotificationsController {
     ]);
 
     return res.json({
-      items: notifications.map(toNotificationPayload),
+      items: NotificationFormatter.toNotificationPayloadList(notifications),
       unreadCount
     });
   }
@@ -89,7 +58,7 @@ export class NotificationsController {
       return res.status(401).json({ message: "Token de autenticacao invalido ou ausente" });
     }
 
-    const notificationId = parsePositiveInteger(req.params.id);
+    const notificationId = NotificationValidator.parsePositiveInteger(req.params.id);
     if (!notificationId) return res.status(400).json({ message: "id invalido" });
 
     const notification = await Notification.findByPk(notificationId);
@@ -105,7 +74,7 @@ export class NotificationsController {
       await notification.update({ isRead: true });
     }
 
-    return res.json(toNotificationPayload(notification));
+    return res.json(NotificationFormatter.toNotificationPayload(notification));
   }
 
   static async markAllAsRead(req: Request, res: Response) {
@@ -151,7 +120,7 @@ export class NotificationsController {
       return res.status(401).json({ message: "Token de autenticacao invalido ou ausente" });
     }
 
-    const notificationId = parsePositiveInteger(req.params.id);
+    const notificationId = NotificationValidator.parsePositiveInteger(req.params.id);
     if (!notificationId) return res.status(400).json({ message: "id invalido" });
 
     const notification = await Notification.findByPk(notificationId);

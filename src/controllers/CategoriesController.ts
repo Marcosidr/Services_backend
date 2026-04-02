@@ -1,56 +1,8 @@
 import type { Request, Response } from "express";
 import { Category } from "../models";
 import { paginateItems, parsePagination } from "../utils/pagination";
-
-type CategoryPayload = {
-  slug?: string;
-  label?: string;
-  icon?: string | null;
-  is_active?: boolean;
-};
-
-function parseCategoryId(value: string) {
-  if (!/^\d+$/.test(value)) return null;
-  const id = Number(value);
-  if (!Number.isSafeInteger(id) || id <= 0) return null;
-  return id;
-}
-
-function normalizeOptionalText(value: unknown) {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
-
-function normalizeCategoryLabel(value: unknown) {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
-
-function normalizeCategorySlug(value: string) {
-  const normalized = value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-zA-Z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .replace(/_+/g, "_")
-    .toUpperCase();
-
-  return normalized || null;
-}
-
-function sanitizeCategory(category: Category) {
-  return {
-    id: category.id,
-    slug: category.slug,
-    label: category.label,
-    icon: category.icon,
-    is_active: category.is_active,
-    createdAt: category.createdAt,
-    updatedAt: category.updatedAt
-  };
-}
+import { CategoryValidator, type CategoryPayload } from "../validators/CategoryValidator";
+import { CategoryFormatter } from "../formatters/CategoryFormatter";
 
 export class CategoryController {
   static async index(req: Request, res: Response) {
@@ -60,7 +12,7 @@ export class CategoryController {
       attributes: ["id", "slug", "label", "icon", "is_active", "createdAt", "updatedAt"]
     });
 
-    const sanitizedCategories = categories.map(sanitizeCategory);
+    const sanitizedCategories = categories.map((cat) => CategoryFormatter.sanitizeCategory(cat));
     const pagination = parsePagination({
       page: req.query.page,
       limit: req.query.limit
@@ -79,7 +31,7 @@ export class CategoryController {
       attributes: ["id", "slug", "label", "icon", "is_active", "createdAt", "updatedAt"]
     });
 
-    const sanitizedCategories = categories.map(sanitizeCategory);
+    const sanitizedCategories = categories.map((cat) => CategoryFormatter.sanitizeCategory(cat));
     const pagination = parsePagination({
       page: req.query.page,
       limit: req.query.limit
@@ -95,12 +47,12 @@ export class CategoryController {
   static async store(req: Request<unknown, unknown, CategoryPayload>, res: Response) {
     const { slug, label, icon, is_active } = req.body;
 
-    const normalizedLabel = normalizeCategoryLabel(label);
+    const normalizedLabel = CategoryValidator.normalizeCategoryLabel(label);
     if (!normalizedLabel) {
       return res.status(400).json({ message: "label e obrigatorio" });
     }
 
-    const normalizedSlug = normalizeCategorySlug(
+    const normalizedSlug = CategoryValidator.normalizeCategorySlug(
       typeof slug === "string" && slug.trim() ? slug : normalizedLabel
     );
     if (!normalizedSlug) {
@@ -120,18 +72,18 @@ export class CategoryController {
     const createdCategory = await Category.create({
       slug: normalizedSlug,
       label: normalizedLabel,
-      icon: normalizeOptionalText(icon),
+      icon: CategoryValidator.normalizeOptionalText(icon),
       is_active: typeof is_active === "boolean" ? is_active : true
     });
 
-    return res.status(201).json(sanitizeCategory(createdCategory));
+    return res.status(201).json(CategoryFormatter.sanitizeCategory(createdCategory));
   }
 
   static async update(
     req: Request<{ id: string }, unknown, CategoryPayload>,
     res: Response
   ) {
-    const categoryId = parseCategoryId(req.params.id);
+    const categoryId = CategoryValidator.parseCategoryId(req.params.id);
     if (!categoryId) {
       return res.status(400).json({ message: "id invalido" });
     }
@@ -152,14 +104,14 @@ export class CategoryController {
     }
 
     const nextLabel =
-      typeof label === "undefined" ? category.label : normalizeCategoryLabel(label);
+      typeof label === "undefined" ? category.label : CategoryValidator.normalizeCategoryLabel(label);
     if (!nextLabel) {
       return res.status(400).json({ message: "label invalido" });
     }
 
     const slugSource =
       typeof slug === "undefined" ? category.slug : typeof slug === "string" ? slug : "";
-    const nextSlug = normalizeCategorySlug(slugSource);
+    const nextSlug = CategoryValidator.normalizeCategorySlug(slugSource);
     if (!nextSlug) {
       return res.status(400).json({ message: "slug invalido" });
     }
@@ -181,15 +133,15 @@ export class CategoryController {
     await category.update({
       slug: nextSlug,
       label: nextLabel,
-      ...(typeof icon !== "undefined" ? { icon: normalizeOptionalText(icon) } : {}),
+      ...(typeof icon !== "undefined" ? { icon: CategoryValidator.normalizeOptionalText(icon) } : {}),
       ...(typeof is_active === "boolean" ? { is_active } : {})
     });
 
-    return res.json(sanitizeCategory(category));
+    return res.json(CategoryFormatter.sanitizeCategory(category));
   }
 
   static async destroy(req: Request<{ id: string }>, res: Response) {
-    const categoryId = parseCategoryId(req.params.id);
+    const categoryId = CategoryValidator.parseCategoryId(req.params.id);
     if (!categoryId) {
       return res.status(400).json({ message: "id invalido" });
     }
