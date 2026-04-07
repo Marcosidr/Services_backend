@@ -48,6 +48,17 @@ type MockResponse = Response & {
   body?: unknown;
 };
 
+type AuthenticatedUser = {
+  id: number;
+  sub: string;
+  role: Role;
+  email?: string;
+};
+
+type MockRequest = Partial<Request> & {
+  user?: AuthenticatedUser;
+};
+
 const models = jest.requireMock("../src/models") as any;
 
 function createFakeUser(options: FakeUserOptions = {}) {
@@ -81,7 +92,7 @@ function createFakeUser(options: FakeUserOptions = {}) {
   };
 }
 
-function createRequest(partial: Partial<Request>) {
+function createRequest(partial: MockRequest) {
   return partial as Request;
 }
 
