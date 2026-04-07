@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "ignoreDeprecations": "6.0",
+    "ignoreDeprecations": "5.0",
     "target": "ES2020",
     "module": "CommonJS",
     "moduleResolution": "Node",
@@ -9,7 +9,7 @@
     "strict": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
-    "skipLibCheck": true
+    "skipLibCheck":true
   },
   "include": ["src/**/*.ts", "src/**/*.d.ts"]
 }
